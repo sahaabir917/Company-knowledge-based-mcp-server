@@ -10,7 +10,8 @@ from fastmcp import FastMCP
 # Using int | str in signatures makes the JSON schema accept both.
 # _Conn transparently coerces any numeric string arg → int before
 # every asyncpg call, so no individual tool needs to cast manually.
-CoercedInt = int | str
+CoercedInt   = int | str
+CoercedFloat = float | str
 
 # Load .env from the same folder as main.py
 ENV_PATH = Path(__file__).parent / ".env"
@@ -46,8 +47,15 @@ class _Conn:
     def _cast(args: tuple) -> list:
         out = []
         for a in args:
-            if isinstance(a, str) and a.lstrip("-").isdigit():
-                out.append(int(a))
+            if isinstance(a, str):
+                s = a.lstrip("-")
+                if s.isdigit():
+                    out.append(int(a))
+                else:
+                    try:
+                        out.append(float(a))
+                    except ValueError:
+                        out.append(a)
             else:
                 out.append(a)
         return out
@@ -1085,7 +1093,7 @@ async def list_member_tasks(member_id: CoercedInt) -> list[dict[str, Any]] | dic
 @mcp.tool()
 async def set_project_budget(
     project_id: CoercedInt,
-    total_amount: float,
+    total_amount: CoercedFloat,
     currency: str = "USD",
     approved_by: str = "",
     approved_at: str = "",
@@ -1207,7 +1215,7 @@ async def delete_project_budget(project_id: CoercedInt) -> dict[str, str]:
 async def add_expense(
     project_id: CoercedInt,
     title: str,
-    amount: float,
+    amount: CoercedFloat,
     category: str = "",
     incurred_at: str = "",
     recorded_by_member_id: CoercedInt = 0,
@@ -1322,7 +1330,7 @@ async def get_expense(expense_id: CoercedInt) -> dict[str, Any]:
 async def update_expense(
     expense_id: CoercedInt,
     title: str,
-    amount: float,
+    amount: CoercedFloat,
     category: str = "",
     incurred_at: str = "",
     notes: str = "",
