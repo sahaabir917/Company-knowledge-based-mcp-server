@@ -6,6 +6,12 @@ import asyncpg
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 
+# LLMs often pass numbers as strings ("1" instead of 1).
+# int | str / float | str makes the JSON schema accept both.
+# _Conn casts numeric strings to int/float before every asyncpg call.
+CoercedInt   = int   | str
+CoercedFloat = float | str
+
 # Load .env from the same folder as main.py
 ENV_PATH = Path(__file__).parent / ".env"
 load_dotenv(ENV_PATH, override=True)
@@ -35,11 +41,48 @@ def get_database_url() -> str:
     return f"postgresql://{user}:{password}@{host}:{port}/{database}"
 
 
-async def get_connection() -> asyncpg.Connection:
-    return await asyncpg.connect(
-        get_database_url(),
-        ssl="require",
-    )
+class _Conn:
+    """Wraps asyncpg.Connection — coerces numeric string args to int/float."""
+
+    def __init__(self, conn: asyncpg.Connection) -> None:
+        self._conn = conn
+
+    @staticmethod
+    def _cast(args: tuple) -> list:
+        out = []
+        for a in args:
+            if isinstance(a, str):
+                s = a.lstrip("-")
+                if s.isdigit():
+                    out.append(int(a))
+                else:
+                    try:
+                        out.append(float(a))
+                    except ValueError:
+                        out.append(a)
+            else:
+                out.append(a)
+        return out
+
+    async def execute(self, q: str, *args):
+        return await self._conn.execute(q, *self._cast(args))
+
+    async def fetch(self, q: str, *args):
+        return await self._conn.fetch(q, *self._cast(args))
+
+    async def fetchrow(self, q: str, *args):
+        return await self._conn.fetchrow(q, *self._cast(args))
+
+    async def fetchval(self, q: str, *args):
+        return await self._conn.fetchval(q, *self._cast(args))
+
+    async def close(self):
+        await self._conn.close()
+
+
+async def get_connection() -> _Conn:
+    conn = await asyncpg.connect(get_database_url(), ssl="require")
+    return _Conn(conn)
 
 
 def serialize_row(row: asyncpg.Record) -> dict[str, Any]:
@@ -268,7 +311,7 @@ async def list_departments() -> list[dict[str, Any]] | dict[str, str]:
 
 
 @mcp.tool()
-async def get_department(department_id: int) -> dict[str, Any]:
+async def get_department(department_id: CoercedInt) -> dict[str, Any]:
     """Get a department by its ID."""
     conn = await get_connection()
     try:
@@ -290,7 +333,7 @@ async def get_department(department_id: int) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def update_department(department_id: int, name: str, description: str = "") -> dict[str, Any]:
+async def update_department(department_id: CoercedInt, name: str, description: str = "") -> dict[str, Any]:
     """Update a department's name and description."""
     conn = await get_connection()
     try:
@@ -315,7 +358,7 @@ async def update_department(department_id: int, name: str, description: str = ""
 
 
 @mcp.tool()
-async def delete_department(department_id: int) -> dict[str, str]:
+async def delete_department(department_id: CoercedInt) -> dict[str, str]:
     """Delete a department by its ID."""
     conn = await get_connection()
     try:
@@ -326,6 +369,148 @@ async def delete_department(department_id: int) -> dict[str, str]:
         if int(result.split()[-1]) == 0:
             return {"status": "error", "message": "Department not found"}
         return {"status": "success", "message": f"Department {department_id} deleted successfully"}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+# =============================================================================
+# TEAM TOOLS  (id is INT — caller must supply the ID)
+# =============================================================================
+
+@mcp.tool()
+async def add_team(
+    id: CoercedInt,
+    name: str,
+    department_id: CoercedInt,
+    description: str = "",
+) -> dict[str, Any]:
+    """Add a new team. id and department_id must be integers (department_id is a FK to department)."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO public.team (id, name, department_id, description)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id, name, department_id, description, created_at;
+            """,
+            id, name, department_id, description,
+        )
+        return {"status": "success", "team": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def list_teams() -> list[dict[str, Any]] | dict[str, str]:
+    """List all teams with their department name."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT t.id, t.name, t.description, t.created_at,
+                   t.department_id, d.name AS department_name
+            FROM public.team t
+            JOIN public.department d ON d.id = t.department_id
+            ORDER BY t.id;
+            """
+        )
+        return [serialize_row(row) for row in rows]
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def list_teams_by_department(department_id: CoercedInt) -> list[dict[str, Any]] | dict[str, str]:
+    """List all teams in a specific department."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT t.id, t.name, t.description, t.created_at,
+                   t.department_id, d.name AS department_name
+            FROM public.team t
+            JOIN public.department d ON d.id = t.department_id
+            WHERE t.department_id = $1
+            ORDER BY t.id;
+            """,
+            department_id,
+        )
+        return [serialize_row(row) for row in rows]
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def get_team(team_id: CoercedInt) -> dict[str, Any]:
+    """Get a team by its ID."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT t.id, t.name, t.description, t.created_at,
+                   t.department_id, d.name AS department_name
+            FROM public.team t
+            JOIN public.department d ON d.id = t.department_id
+            WHERE t.id = $1;
+            """,
+            team_id,
+        )
+        if not row:
+            return {"status": "error", "message": "Team not found"}
+        return {"status": "success", "team": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def update_team(
+    team_id: CoercedInt,
+    name: str,
+    description: str = "",
+) -> dict[str, Any]:
+    """Update a team's name and description."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            UPDATE public.team
+            SET name = $2, description = $3
+            WHERE id = $1
+            RETURNING id, name, department_id, description, created_at;
+            """,
+            team_id, name, description,
+        )
+        if not row:
+            return {"status": "error", "message": "Team not found"}
+        return {"status": "success", "team": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def delete_team(team_id: CoercedInt) -> dict[str, str]:
+    """Delete a team by its ID."""
+    conn = await get_connection()
+    try:
+        result = await conn.execute(
+            "DELETE FROM public.team WHERE id = $1;",
+            team_id,
+        )
+        if int(result.split()[-1]) == 0:
+            return {"status": "error", "message": "Team not found"}
+        return {"status": "success", "message": f"Team {team_id} deleted successfully"}
     except Exception as exc:
         return {"status": "error", "message": str(exc)}
     finally:
