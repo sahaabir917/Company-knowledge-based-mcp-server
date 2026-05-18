@@ -1,10 +1,14 @@
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 import asyncpg
 from dotenv import load_dotenv
 from fastmcp import FastMCP
+from pydantic import BeforeValidator
+
+# Coerces "1" → 1 so LLMs that pass integer IDs as strings still work
+CoercedInt = Annotated[int, BeforeValidator(int)]
 
 # Load .env from the same folder as main.py
 ENV_PATH = Path(__file__).parent / ".env"
@@ -268,7 +272,7 @@ async def list_departments() -> list[dict[str, Any]] | dict[str, str]:
 
 
 @mcp.tool()
-async def get_department(department_id: int) -> dict[str, Any]:
+async def get_department(department_id: CoercedInt) -> dict[str, Any]:
     """Get a department by its ID."""
     conn = await get_connection()
     try:
@@ -290,7 +294,7 @@ async def get_department(department_id: int) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def update_department(department_id: int, name: str, description: str = "") -> dict[str, Any]:
+async def update_department(department_id: CoercedInt, name: str, description: str = "") -> dict[str, Any]:
     """Update a department's name and description."""
     conn = await get_connection()
     try:
@@ -315,7 +319,7 @@ async def update_department(department_id: int, name: str, description: str = ""
 
 
 @mcp.tool()
-async def delete_department(department_id: int) -> dict[str, str]:
+async def delete_department(department_id: CoercedInt) -> dict[str, str]:
     """Delete a department by its ID."""
     conn = await get_connection()
     try:
@@ -337,7 +341,7 @@ async def delete_department(department_id: int) -> dict[str, str]:
 # =============================================================================
 
 @mcp.tool()
-async def add_team(name: str, department_id: int, description: str = "") -> dict[str, Any]:
+async def add_team(name: str, department_id: CoercedInt, description: str = "") -> dict[str, Any]:
     """Add a new team under a department."""
     conn = await get_connection()
     try:
@@ -380,7 +384,7 @@ async def list_teams() -> list[dict[str, Any]] | dict[str, str]:
 
 
 @mcp.tool()
-async def list_teams_by_department(department_id: int) -> list[dict[str, Any]] | dict[str, str]:
+async def list_teams_by_department(department_id: CoercedInt) -> list[dict[str, Any]] | dict[str, str]:
     """List all teams in a specific department."""
     conn = await get_connection()
     try:
@@ -403,7 +407,7 @@ async def list_teams_by_department(department_id: int) -> list[dict[str, Any]] |
 
 
 @mcp.tool()
-async def get_team(team_id: int) -> dict[str, Any]:
+async def get_team(team_id: CoercedInt) -> dict[str, Any]:
     """Get a team by its ID."""
     conn = await get_connection()
     try:
@@ -427,7 +431,7 @@ async def get_team(team_id: int) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def update_team(team_id: int, name: str, description: str = "") -> dict[str, Any]:
+async def update_team(team_id: CoercedInt, name: str, description: str = "") -> dict[str, Any]:
     """Update a team's name and description."""
     conn = await get_connection()
     try:
@@ -452,7 +456,7 @@ async def update_team(team_id: int, name: str, description: str = "") -> dict[st
 
 
 @mcp.tool()
-async def delete_team(team_id: int) -> dict[str, str]:
+async def delete_team(team_id: CoercedInt) -> dict[str, str]:
     """Delete a team by its ID."""
     conn = await get_connection()
     try:
@@ -474,7 +478,7 @@ async def delete_team(team_id: int) -> dict[str, str]:
 # =============================================================================
 
 @mcp.tool()
-async def add_team_member(team_id: int, member_id: int) -> dict[str, Any]:
+async def add_team_member(team_id: CoercedInt, member_id: CoercedInt) -> dict[str, Any]:
     """Add a member to a team."""
     conn = await get_connection()
     try:
@@ -495,7 +499,7 @@ async def add_team_member(team_id: int, member_id: int) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def remove_team_member(team_id: int, member_id: int) -> dict[str, str]:
+async def remove_team_member(team_id: CoercedInt, member_id: CoercedInt) -> dict[str, str]:
     """Remove a member from a team."""
     conn = await get_connection()
     try:
@@ -514,7 +518,7 @@ async def remove_team_member(team_id: int, member_id: int) -> dict[str, str]:
 
 
 @mcp.tool()
-async def list_team_members(team_id: int) -> list[dict[str, Any]] | dict[str, str]:
+async def list_team_members(team_id: CoercedInt) -> list[dict[str, Any]] | dict[str, str]:
     """List all members in a team."""
     conn = await get_connection()
     try:
@@ -538,7 +542,7 @@ async def list_team_members(team_id: int) -> list[dict[str, Any]] | dict[str, st
 
 
 @mcp.tool()
-async def list_member_teams(member_id: int) -> list[dict[str, Any]] | dict[str, str]:
+async def list_member_teams(member_id: CoercedInt) -> list[dict[str, Any]] | dict[str, str]:
     """List all teams a member belongs to."""
     conn = await get_connection()
     try:
@@ -569,7 +573,7 @@ async def list_member_teams(member_id: int) -> list[dict[str, Any]] | dict[str, 
 @mcp.tool()
 async def add_project(
     name: str,
-    team_id: int,
+    team_id: CoercedInt,
     description: str = "",
     status: str = "active",
     start_date: str = "",
@@ -623,7 +627,7 @@ async def list_projects() -> list[dict[str, Any]] | dict[str, str]:
 
 
 @mcp.tool()
-async def list_projects_by_team(team_id: int) -> list[dict[str, Any]] | dict[str, str]:
+async def list_projects_by_team(team_id: CoercedInt) -> list[dict[str, Any]] | dict[str, str]:
     """List all projects belonging to a specific team."""
     conn = await get_connection()
     try:
@@ -673,7 +677,7 @@ async def list_projects_by_status(status: str) -> list[dict[str, Any]] | dict[st
 
 
 @mcp.tool()
-async def get_project(project_id: int) -> dict[str, Any]:
+async def get_project(project_id: CoercedInt) -> dict[str, Any]:
     """Get a project by its ID."""
     conn = await get_connection()
     try:
@@ -701,7 +705,7 @@ async def get_project(project_id: int) -> dict[str, Any]:
 
 @mcp.tool()
 async def update_project(
-    project_id: int,
+    project_id: CoercedInt,
     name: str,
     description: str = "",
     status: str = "active",
@@ -736,7 +740,7 @@ async def update_project(
 
 
 @mcp.tool()
-async def delete_project(project_id: int) -> dict[str, str]:
+async def delete_project(project_id: CoercedInt) -> dict[str, str]:
     """Delete a project by its ID."""
     conn = await get_connection()
     try:
@@ -760,7 +764,7 @@ async def delete_project(project_id: int) -> dict[str, str]:
 @mcp.tool()
 async def add_task(
     title: str,
-    project_id: int,
+    project_id: CoercedInt,
     description: str = "",
     status: str = "todo",
     priority: str = "medium",
@@ -809,7 +813,7 @@ async def list_tasks() -> list[dict[str, Any]] | dict[str, str]:
 
 
 @mcp.tool()
-async def list_tasks_by_project(project_id: int) -> list[dict[str, Any]] | dict[str, str]:
+async def list_tasks_by_project(project_id: CoercedInt) -> list[dict[str, Any]] | dict[str, str]:
     """List all tasks in a specific project."""
     conn = await get_connection()
     try:
@@ -878,7 +882,7 @@ async def list_tasks_by_priority(priority: str) -> list[dict[str, Any]] | dict[s
 
 
 @mcp.tool()
-async def get_task(task_id: int) -> dict[str, Any]:
+async def get_task(task_id: CoercedInt) -> dict[str, Any]:
     """Get a task by its ID."""
     conn = await get_connection()
     try:
@@ -906,7 +910,7 @@ async def get_task(task_id: int) -> dict[str, Any]:
 
 @mcp.tool()
 async def update_task(
-    task_id: int,
+    task_id: CoercedInt,
     title: str,
     description: str = "",
     status: str = "todo",
@@ -935,7 +939,7 @@ async def update_task(
 
 
 @mcp.tool()
-async def delete_task(task_id: int) -> dict[str, str]:
+async def delete_task(task_id: CoercedInt) -> dict[str, str]:
     """Delete a task by its ID."""
     conn = await get_connection()
     try:
@@ -957,7 +961,7 @@ async def delete_task(task_id: int) -> dict[str, str]:
 # =============================================================================
 
 @mcp.tool()
-async def assign_task(task_id: int, member_id: int) -> dict[str, Any]:
+async def assign_task(task_id: CoercedInt, member_id: CoercedInt) -> dict[str, Any]:
     """Assign a member to a task."""
     conn = await get_connection()
     try:
@@ -978,7 +982,7 @@ async def assign_task(task_id: int, member_id: int) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def unassign_task(task_id: int, member_id: int) -> dict[str, str]:
+async def unassign_task(task_id: CoercedInt, member_id: CoercedInt) -> dict[str, str]:
     """Remove a member's assignment from a task."""
     conn = await get_connection()
     try:
@@ -997,7 +1001,7 @@ async def unassign_task(task_id: int, member_id: int) -> dict[str, str]:
 
 
 @mcp.tool()
-async def list_task_assignees(task_id: int) -> list[dict[str, Any]] | dict[str, str]:
+async def list_task_assignees(task_id: CoercedInt) -> list[dict[str, Any]] | dict[str, str]:
     """List all members assigned to a task."""
     conn = await get_connection()
     try:
@@ -1021,7 +1025,7 @@ async def list_task_assignees(task_id: int) -> list[dict[str, Any]] | dict[str, 
 
 
 @mcp.tool()
-async def list_member_tasks(member_id: int) -> list[dict[str, Any]] | dict[str, str]:
+async def list_member_tasks(member_id: CoercedInt) -> list[dict[str, Any]] | dict[str, str]:
     """List all tasks assigned to a member."""
     conn = await get_connection()
     try:
@@ -1053,7 +1057,7 @@ async def list_member_tasks(member_id: int) -> list[dict[str, Any]] | dict[str, 
 
 @mcp.tool()
 async def set_project_budget(
-    project_id: int,
+    project_id: CoercedInt,
     total_amount: float,
     currency: str = "USD",
     approved_by: str = "",
@@ -1092,7 +1096,7 @@ async def set_project_budget(
 
 
 @mcp.tool()
-async def get_project_budget(project_id: int) -> dict[str, Any]:
+async def get_project_budget(project_id: CoercedInt) -> dict[str, Any]:
     """Get the budget for a project, including total spent and remaining amount."""
     conn = await get_connection()
     try:
@@ -1151,7 +1155,7 @@ async def list_project_budgets() -> list[dict[str, Any]] | dict[str, str]:
 
 
 @mcp.tool()
-async def delete_project_budget(project_id: int) -> dict[str, str]:
+async def delete_project_budget(project_id: CoercedInt) -> dict[str, str]:
     """Delete the budget record for a project."""
     conn = await get_connection()
     try:
@@ -1174,12 +1178,12 @@ async def delete_project_budget(project_id: int) -> dict[str, str]:
 
 @mcp.tool()
 async def add_expense(
-    project_id: int,
+    project_id: CoercedInt,
     title: str,
     amount: float,
     category: str = "",
     incurred_at: str = "",
-    recorded_by_member_id: int = 0,
+    recorded_by_member_id: CoercedInt = 0,
     notes: str = "",
 ) -> dict[str, Any]:
     """Add an expense to a project. category: software|hardware|travel|personnel|other. incurred_at: YYYY-MM-DD."""
@@ -1209,7 +1213,7 @@ async def add_expense(
 
 
 @mcp.tool()
-async def list_expenses_by_project(project_id: int) -> list[dict[str, Any]] | dict[str, str]:
+async def list_expenses_by_project(project_id: CoercedInt) -> list[dict[str, Any]] | dict[str, str]:
     """List all expenses for a project."""
     conn = await get_connection()
     try:
@@ -1261,7 +1265,7 @@ async def list_expenses_by_category(category: str) -> list[dict[str, Any]] | dic
 
 
 @mcp.tool()
-async def get_expense(expense_id: int) -> dict[str, Any]:
+async def get_expense(expense_id: CoercedInt) -> dict[str, Any]:
     """Get a single expense by its ID."""
     conn = await get_connection()
     try:
@@ -1289,7 +1293,7 @@ async def get_expense(expense_id: int) -> dict[str, Any]:
 
 @mcp.tool()
 async def update_expense(
-    expense_id: int,
+    expense_id: CoercedInt,
     title: str,
     amount: float,
     category: str = "",
@@ -1320,7 +1324,7 @@ async def update_expense(
 
 
 @mcp.tool()
-async def delete_expense(expense_id: int) -> dict[str, str]:
+async def delete_expense(expense_id: CoercedInt) -> dict[str, str]:
     """Delete an expense by its ID."""
     conn = await get_connection()
     try:
@@ -1343,11 +1347,11 @@ async def delete_expense(expense_id: int) -> dict[str, str]:
 
 @mcp.tool()
 async def add_knowledge(
-    project_id: int,
+    project_id: CoercedInt,
     title: str,
     content: str,
     tags: list[str] | None = None,
-    author_member_id: int = 0,
+    author_member_id: CoercedInt = 0,
 ) -> dict[str, Any]:
     """Add a knowledge entry to a project. tags is a list of strings."""
     conn = await get_connection()
@@ -1374,7 +1378,7 @@ async def add_knowledge(
 
 
 @mcp.tool()
-async def list_knowledge_by_project(project_id: int) -> list[dict[str, Any]] | dict[str, str]:
+async def list_knowledge_by_project(project_id: CoercedInt) -> list[dict[str, Any]] | dict[str, str]:
     """List all knowledge entries for a project."""
     conn = await get_connection()
     try:
@@ -1426,7 +1430,7 @@ async def search_knowledge_by_tag(tag: str) -> list[dict[str, Any]] | dict[str, 
 
 
 @mcp.tool()
-async def get_knowledge(knowledge_id: int) -> dict[str, Any]:
+async def get_knowledge(knowledge_id: CoercedInt) -> dict[str, Any]:
     """Get a knowledge entry by its ID."""
     conn = await get_connection()
     try:
@@ -1454,7 +1458,7 @@ async def get_knowledge(knowledge_id: int) -> dict[str, Any]:
 
 @mcp.tool()
 async def update_knowledge(
-    knowledge_id: int,
+    knowledge_id: CoercedInt,
     title: str,
     content: str,
     tags: list[str] | None = None,
@@ -1485,7 +1489,7 @@ async def update_knowledge(
 
 
 @mcp.tool()
-async def delete_knowledge(knowledge_id: int) -> dict[str, str]:
+async def delete_knowledge(knowledge_id: CoercedInt) -> dict[str, str]:
     """Delete a knowledge entry by its ID."""
     conn = await get_connection()
     try:
