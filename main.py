@@ -1,14 +1,16 @@
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Any
 import asyncpg
 from dotenv import load_dotenv
 from fastmcp import FastMCP
-from pydantic import BeforeValidator
 
-# int | str → schema accepts both 1 and "1"; BeforeValidator casts to int before use
-CoercedInt = Annotated[int | str, BeforeValidator(int)]
+# LLMs sometimes pass integer IDs as strings ("1" instead of 1).
+# Using int | str in signatures makes the JSON schema accept both.
+# _Conn transparently coerces any numeric string arg → int before
+# every asyncpg call, so no individual tool needs to cast manually.
+CoercedInt = int | str
 
 # Load .env from the same folder as main.py
 ENV_PATH = Path(__file__).parent / ".env"
@@ -19,11 +21,6 @@ mcp = FastMCP("PostgresMemberServer")
 
 def get_database_url() -> str:
     database_url = os.getenv("DATABASE_URL")
-
-    print("ENV PATH:", ENV_PATH)
-    print("DEBUG DATABASE_URL:", database_url)
-    print("DEBUG POSTGRES_HOST:", os.getenv("POSTGRES_HOST"))
-
     if database_url:
         return database_url.strip()
 
@@ -39,11 +36,41 @@ def get_database_url() -> str:
     return f"postgresql://{user}:{password}@{host}:{port}/{database}"
 
 
-async def get_connection() -> asyncpg.Connection:
-    return await asyncpg.connect(
-        get_database_url(),
-        ssl="require",
-    )
+class _Conn:
+    """Thin asyncpg wrapper that coerces numeric string args to int."""
+
+    def __init__(self, conn: asyncpg.Connection) -> None:
+        self._conn = conn
+
+    @staticmethod
+    def _cast(args: tuple) -> list:
+        out = []
+        for a in args:
+            if isinstance(a, str) and a.lstrip("-").isdigit():
+                out.append(int(a))
+            else:
+                out.append(a)
+        return out
+
+    async def execute(self, q: str, *args):
+        return await self._conn.execute(q, *self._cast(args))
+
+    async def fetch(self, q: str, *args):
+        return await self._conn.fetch(q, *self._cast(args))
+
+    async def fetchrow(self, q: str, *args):
+        return await self._conn.fetchrow(q, *self._cast(args))
+
+    async def fetchval(self, q: str, *args):
+        return await self._conn.fetchval(q, *self._cast(args))
+
+    async def close(self):
+        await self._conn.close()
+
+
+async def get_connection() -> _Conn:
+    conn = await asyncpg.connect(get_database_url(), ssl="require")
+    return _Conn(conn)
 
 
 def serialize_row(row: asyncpg.Record) -> dict[str, Any]:
