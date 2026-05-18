@@ -29,7 +29,10 @@ def get_database_url() -> str:
 
 
 async def get_connection() -> asyncpg.Connection:
-    return await asyncpg.connect(get_database_url())
+    url = get_database_url()
+    if "localhost" not in url and "127.0.0.1" not in url:
+        return await asyncpg.connect(url, ssl="require")
+    return await asyncpg.connect(url)
 
 
 def serialize_member(row: asyncpg.Record) -> dict[str, Any]:
