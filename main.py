@@ -100,6 +100,12 @@ def serialize_row(row: asyncpg.Record) -> dict[str, Any]:
 serialize_member = serialize_row
 
 
+def list_result(rows) -> dict[str, Any]:
+    """Wrap a list of rows in a dict so the response is never empty content."""
+    data = [serialize_row(r) for r in rows]
+    return {"count": len(data), "results": data}
+
+
 @mcp.tool()
 async def test_connection() -> dict[str, Any]:
     conn = await get_connection()
@@ -188,7 +194,7 @@ async def list_members() -> list[dict[str, Any]] | dict[str, str]:
             """
         )
 
-        return [serialize_member(row) for row in rows]
+        return list_result(rows)
 
     except Exception as exc:
         return {
@@ -303,7 +309,7 @@ async def list_departments() -> list[dict[str, Any]] | dict[str, str]:
             ORDER BY id;
             """
         )
-        return [serialize_row(row) for row in rows]
+        return list_result(rows)
     except Exception as exc:
         return {"status": "error", "message": str(exc)}
     finally:
@@ -418,7 +424,7 @@ async def list_teams() -> list[dict[str, Any]] | dict[str, str]:
             ORDER BY t.id;
             """
         )
-        return [serialize_row(row) for row in rows]
+        return list_result(rows)
     except Exception as exc:
         return {"status": "error", "message": str(exc)}
     finally:
@@ -441,7 +447,7 @@ async def list_teams_by_department(department_id: CoercedInt) -> list[dict[str, 
             """,
             department_id,
         )
-        return [serialize_row(row) for row in rows]
+        return list_result(rows)
     except Exception as exc:
         return {"status": "error", "message": str(exc)}
     finally:
@@ -511,6 +517,845 @@ async def delete_team(team_id: CoercedInt) -> dict[str, str]:
         if int(result.split()[-1]) == 0:
             return {"status": "error", "message": "Team not found"}
         return {"status": "success", "message": f"Team {team_id} deleted successfully"}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+# =============================================================================
+# TEAM MEMBER TOOLS  (junction: team ↔ member)
+# =============================================================================
+
+@mcp.tool()
+async def add_team_member(team_id: CoercedInt, member_id: CoercedInt) -> dict[str, Any]:
+    """Add a member to a team."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO public.team_member (team_id, member_id)
+            VALUES ($1, $2)
+            RETURNING team_id, member_id, joined_at;
+            """,
+            team_id, member_id,
+        )
+        return {"status": "success", "team_member": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def list_team_members(team_id: CoercedInt) -> dict[str, Any]:
+    """List all members of a team."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT m.id, m.name, m.email, m.phone, m.role, tm.joined_at
+            FROM public.team_member tm
+            JOIN public.member m ON m.id = tm.member_id
+            WHERE tm.team_id = $1
+            ORDER BY m.name;
+            """,
+            team_id,
+        )
+        return list_result(rows)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def list_member_teams(member_id: CoercedInt) -> dict[str, Any]:
+    """List all teams a member belongs to."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT t.id, t.name, t.description, d.name AS department_name, tm.joined_at
+            FROM public.team_member tm
+            JOIN public.team t ON t.id = tm.team_id
+            JOIN public.department d ON d.id = t.department_id
+            WHERE tm.member_id = $1
+            ORDER BY t.name;
+            """,
+            member_id,
+        )
+        return list_result(rows)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def remove_team_member(team_id: CoercedInt, member_id: CoercedInt) -> dict[str, str]:
+    """Remove a member from a team."""
+    conn = await get_connection()
+    try:
+        result = await conn.execute(
+            "DELETE FROM public.team_member WHERE team_id = $1 AND member_id = $2;",
+            team_id, member_id,
+        )
+        if int(result.split()[-1]) == 0:
+            return {"status": "error", "message": "Team member assignment not found"}
+        return {"status": "success", "message": f"Member {member_id} removed from team {team_id}"}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+# =============================================================================
+# PROJECT TOOLS
+# =============================================================================
+
+@mcp.tool()
+async def add_project(
+    name: str,
+    team_id: CoercedInt,
+    description: str = "",
+    status: str = "active",
+    start_date: str = "",
+    end_date: str = "",
+) -> dict[str, Any]:
+    """Add a new project. status: active / on_hold / completed / cancelled."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO public.project (name, team_id, description, status, start_date, end_date)
+            VALUES ($1, $2, $3, $4, $5::date, $6::date)
+            RETURNING id, name, team_id, description, status, start_date, end_date, created_at;
+            """,
+            name, team_id, description, status,
+            start_date if start_date else None,
+            end_date if end_date else None,
+        )
+        return {"status": "success", "project": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def list_projects() -> dict[str, Any]:
+    """List all projects with team and department info."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT p.id, p.name, p.description, p.status, p.start_date, p.end_date, p.created_at,
+                   p.team_id, t.name AS team_name, d.name AS department_name
+            FROM public.project p
+            JOIN public.team t ON t.id = p.team_id
+            JOIN public.department d ON d.id = t.department_id
+            ORDER BY p.id;
+            """
+        )
+        return list_result(rows)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def list_projects_by_team(team_id: CoercedInt) -> dict[str, Any]:
+    """List all projects for a specific team."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT p.id, p.name, p.description, p.status, p.start_date, p.end_date, p.created_at,
+                   p.team_id, t.name AS team_name
+            FROM public.project p
+            JOIN public.team t ON t.id = p.team_id
+            WHERE p.team_id = $1
+            ORDER BY p.id;
+            """,
+            team_id,
+        )
+        return list_result(rows)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def get_project(project_id: CoercedInt) -> dict[str, Any]:
+    """Get a project by its ID."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT p.id, p.name, p.description, p.status, p.start_date, p.end_date, p.created_at,
+                   p.team_id, t.name AS team_name, d.name AS department_name
+            FROM public.project p
+            JOIN public.team t ON t.id = p.team_id
+            JOIN public.department d ON d.id = t.department_id
+            WHERE p.id = $1;
+            """,
+            project_id,
+        )
+        if not row:
+            return {"status": "error", "message": "Project not found"}
+        return {"status": "success", "project": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def update_project(
+    project_id: CoercedInt,
+    name: str,
+    description: str = "",
+    status: str = "active",
+    start_date: str = "",
+    end_date: str = "",
+) -> dict[str, Any]:
+    """Update a project. status: active / on_hold / completed / cancelled."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            UPDATE public.project
+            SET name = $2, description = $3, status = $4,
+                start_date = $5::date, end_date = $6::date
+            WHERE id = $1
+            RETURNING id, name, team_id, description, status, start_date, end_date, created_at;
+            """,
+            project_id, name, description, status,
+            start_date if start_date else None,
+            end_date if end_date else None,
+        )
+        if not row:
+            return {"status": "error", "message": "Project not found"}
+        return {"status": "success", "project": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def delete_project(project_id: CoercedInt) -> dict[str, str]:
+    """Delete a project by its ID."""
+    conn = await get_connection()
+    try:
+        result = await conn.execute(
+            "DELETE FROM public.project WHERE id = $1;",
+            project_id,
+        )
+        if int(result.split()[-1]) == 0:
+            return {"status": "error", "message": "Project not found"}
+        return {"status": "success", "message": f"Project {project_id} deleted successfully"}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+# =============================================================================
+# TASK TOOLS
+# =============================================================================
+
+@mcp.tool()
+async def add_task(
+    title: str,
+    project_id: CoercedInt,
+    description: str = "",
+    status: str = "todo",
+    priority: str = "medium",
+    due_date: str = "",
+) -> dict[str, Any]:
+    """Add a new task. status: todo/in_progress/review/done/cancelled. priority: low/medium/high/critical."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO public.task (title, project_id, description, status, priority, due_date)
+            VALUES ($1, $2, $3, $4, $5, $6::date)
+            RETURNING id, title, project_id, description, status, priority, due_date, created_at;
+            """,
+            title, project_id, description, status, priority,
+            due_date if due_date else None,
+        )
+        return {"status": "success", "task": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def list_tasks_by_project(project_id: CoercedInt) -> dict[str, Any]:
+    """List all tasks for a project."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT id, title, description, status, priority, due_date, created_at
+            FROM public.task
+            WHERE project_id = $1
+            ORDER BY id;
+            """,
+            project_id,
+        )
+        return list_result(rows)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def get_task(task_id: CoercedInt) -> dict[str, Any]:
+    """Get a task by its ID."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT t.id, t.title, t.description, t.status, t.priority, t.due_date, t.created_at,
+                   t.project_id, p.name AS project_name
+            FROM public.task t
+            JOIN public.project p ON p.id = t.project_id
+            WHERE t.id = $1;
+            """,
+            task_id,
+        )
+        if not row:
+            return {"status": "error", "message": "Task not found"}
+        return {"status": "success", "task": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def update_task(
+    task_id: CoercedInt,
+    title: str,
+    description: str = "",
+    status: str = "todo",
+    priority: str = "medium",
+    due_date: str = "",
+) -> dict[str, Any]:
+    """Update a task. status: todo/in_progress/review/done/cancelled. priority: low/medium/high/critical."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            UPDATE public.task
+            SET title = $2, description = $3, status = $4, priority = $5, due_date = $6::date
+            WHERE id = $1
+            RETURNING id, title, project_id, description, status, priority, due_date, created_at;
+            """,
+            task_id, title, description, status, priority,
+            due_date if due_date else None,
+        )
+        if not row:
+            return {"status": "error", "message": "Task not found"}
+        return {"status": "success", "task": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def delete_task(task_id: CoercedInt) -> dict[str, str]:
+    """Delete a task by its ID."""
+    conn = await get_connection()
+    try:
+        result = await conn.execute(
+            "DELETE FROM public.task WHERE id = $1;",
+            task_id,
+        )
+        if int(result.split()[-1]) == 0:
+            return {"status": "error", "message": "Task not found"}
+        return {"status": "success", "message": f"Task {task_id} deleted successfully"}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+# =============================================================================
+# TASK ASSIGNEE TOOLS  (junction: task ↔ member)
+# =============================================================================
+
+@mcp.tool()
+async def assign_task(task_id: CoercedInt, member_id: CoercedInt) -> dict[str, Any]:
+    """Assign a member to a task."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO public.task_assignee (task_id, member_id)
+            VALUES ($1, $2)
+            RETURNING task_id, member_id, assigned_at;
+            """,
+            task_id, member_id,
+        )
+        return {"status": "success", "assignment": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def list_task_assignees(task_id: CoercedInt) -> dict[str, Any]:
+    """List all members assigned to a task."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT m.id, m.name, m.email, m.role, ta.assigned_at
+            FROM public.task_assignee ta
+            JOIN public.member m ON m.id = ta.member_id
+            WHERE ta.task_id = $1
+            ORDER BY m.name;
+            """,
+            task_id,
+        )
+        return list_result(rows)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def list_member_tasks(member_id: CoercedInt) -> dict[str, Any]:
+    """List all tasks assigned to a member."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT t.id, t.title, t.status, t.priority, t.due_date,
+                   p.name AS project_name, ta.assigned_at
+            FROM public.task_assignee ta
+            JOIN public.task t ON t.id = ta.task_id
+            JOIN public.project p ON p.id = t.project_id
+            WHERE ta.member_id = $1
+            ORDER BY t.id;
+            """,
+            member_id,
+        )
+        return list_result(rows)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def unassign_task(task_id: CoercedInt, member_id: CoercedInt) -> dict[str, str]:
+    """Remove a member from a task."""
+    conn = await get_connection()
+    try:
+        result = await conn.execute(
+            "DELETE FROM public.task_assignee WHERE task_id = $1 AND member_id = $2;",
+            task_id, member_id,
+        )
+        if int(result.split()[-1]) == 0:
+            return {"status": "error", "message": "Task assignment not found"}
+        return {"status": "success", "message": f"Member {member_id} unassigned from task {task_id}"}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+# =============================================================================
+# PROJECT BUDGET TOOLS
+# =============================================================================
+
+@mcp.tool()
+async def add_budget(
+    project_id: CoercedInt,
+    total_amount: CoercedFloat,
+    currency: str = "USD",
+    approved_by: str = "",
+    notes: str = "",
+) -> dict[str, Any]:
+    """Set a budget for a project (one per project)."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO public.project_budget (project_id, total_amount, currency, approved_by, notes)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, project_id, total_amount, currency, approved_by, notes, created_at;
+            """,
+            project_id, total_amount, currency, approved_by, notes,
+        )
+        return {"status": "success", "budget": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def get_budget(project_id: CoercedInt) -> dict[str, Any]:
+    """Get the budget for a project."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT b.id, b.project_id, b.total_amount, b.currency,
+                   b.approved_by, b.approved_at, b.notes, b.created_at,
+                   p.name AS project_name
+            FROM public.project_budget b
+            JOIN public.project p ON p.id = b.project_id
+            WHERE b.project_id = $1;
+            """,
+            project_id,
+        )
+        if not row:
+            return {"status": "error", "message": "Budget not found for this project"}
+        return {"status": "success", "budget": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def update_budget(
+    project_id: CoercedInt,
+    total_amount: CoercedFloat,
+    currency: str = "USD",
+    approved_by: str = "",
+    notes: str = "",
+) -> dict[str, Any]:
+    """Update the budget for a project."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            UPDATE public.project_budget
+            SET total_amount = $2, currency = $3, approved_by = $4, notes = $5
+            WHERE project_id = $1
+            RETURNING id, project_id, total_amount, currency, approved_by, notes, created_at;
+            """,
+            project_id, total_amount, currency, approved_by, notes,
+        )
+        if not row:
+            return {"status": "error", "message": "Budget not found for this project"}
+        return {"status": "success", "budget": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def delete_budget(project_id: CoercedInt) -> dict[str, str]:
+    """Delete the budget for a project."""
+    conn = await get_connection()
+    try:
+        result = await conn.execute(
+            "DELETE FROM public.project_budget WHERE project_id = $1;",
+            project_id,
+        )
+        if int(result.split()[-1]) == 0:
+            return {"status": "error", "message": "Budget not found for this project"}
+        return {"status": "success", "message": f"Budget for project {project_id} deleted"}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+# =============================================================================
+# PROJECT EXPENSE TOOLS
+# =============================================================================
+
+@mcp.tool()
+async def add_expense(
+    project_id: CoercedInt,
+    title: str,
+    amount: CoercedFloat,
+    category: str = "",
+    incurred_at: str = "",
+    recorded_by_member_id: CoercedInt = None,
+    notes: str = "",
+) -> dict[str, Any]:
+    """Add an expense to a project. category: software/hardware/travel/personnel/other."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO public.project_expense
+                (project_id, title, amount, category, incurred_at, recorded_by_member_id, notes)
+            VALUES ($1, $2, $3, $4, $5::date, $6, $7)
+            RETURNING id, project_id, title, amount, category, incurred_at,
+                      recorded_by_member_id, notes, created_at;
+            """,
+            project_id, title, amount, category,
+            incurred_at if incurred_at else None,
+            recorded_by_member_id if recorded_by_member_id else None,
+            notes,
+        )
+        return {"status": "success", "expense": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def list_expenses(project_id: CoercedInt) -> dict[str, Any]:
+    """List all expenses for a project."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT e.id, e.title, e.amount, e.category, e.incurred_at, e.notes, e.created_at,
+                   m.name AS recorded_by
+            FROM public.project_expense e
+            LEFT JOIN public.member m ON m.id = e.recorded_by_member_id
+            WHERE e.project_id = $1
+            ORDER BY e.incurred_at DESC, e.id;
+            """,
+            project_id,
+        )
+        return list_result(rows)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def get_expense(expense_id: CoercedInt) -> dict[str, Any]:
+    """Get a single expense by its ID."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT e.id, e.project_id, e.title, e.amount, e.category,
+                   e.incurred_at, e.notes, e.created_at,
+                   m.name AS recorded_by, p.name AS project_name
+            FROM public.project_expense e
+            LEFT JOIN public.member m ON m.id = e.recorded_by_member_id
+            JOIN public.project p ON p.id = e.project_id
+            WHERE e.id = $1;
+            """,
+            expense_id,
+        )
+        if not row:
+            return {"status": "error", "message": "Expense not found"}
+        return {"status": "success", "expense": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def delete_expense(expense_id: CoercedInt) -> dict[str, str]:
+    """Delete an expense by its ID."""
+    conn = await get_connection()
+    try:
+        result = await conn.execute(
+            "DELETE FROM public.project_expense WHERE id = $1;",
+            expense_id,
+        )
+        if int(result.split()[-1]) == 0:
+            return {"status": "error", "message": "Expense not found"}
+        return {"status": "success", "message": f"Expense {expense_id} deleted successfully"}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+# =============================================================================
+# PROJECT KNOWLEDGE TOOLS
+# =============================================================================
+
+@mcp.tool()
+async def add_knowledge(
+    project_id: CoercedInt,
+    title: str,
+    content: str,
+    tags: str = "",
+    author_member_id: CoercedInt = None,
+) -> dict[str, Any]:
+    """Add a knowledge entry to a project. tags: comma-separated string e.g. 'api,auth,v2'."""
+    conn = await get_connection()
+    try:
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+        row = await conn.fetchrow(
+            """
+            INSERT INTO public.project_knowledge
+                (project_id, title, content, tags, author_member_id)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, project_id, title, content, tags, author_member_id, created_at, updated_at;
+            """,
+            project_id, title, content, tag_list,
+            author_member_id if author_member_id else None,
+        )
+        return {"status": "success", "knowledge": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def list_knowledge(project_id: CoercedInt) -> dict[str, Any]:
+    """List all knowledge entries for a project."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT k.id, k.title, k.tags, k.created_at, k.updated_at,
+                   m.name AS author
+            FROM public.project_knowledge k
+            LEFT JOIN public.member m ON m.id = k.author_member_id
+            WHERE k.project_id = $1
+            ORDER BY k.id;
+            """,
+            project_id,
+        )
+        return list_result(rows)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def get_knowledge(knowledge_id: CoercedInt) -> dict[str, Any]:
+    """Get a single knowledge entry by its ID (includes full content)."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT k.id, k.project_id, k.title, k.content, k.tags,
+                   k.created_at, k.updated_at,
+                   m.name AS author, p.name AS project_name
+            FROM public.project_knowledge k
+            LEFT JOIN public.member m ON m.id = k.author_member_id
+            JOIN public.project p ON p.id = k.project_id
+            WHERE k.id = $1;
+            """,
+            knowledge_id,
+        )
+        if not row:
+            return {"status": "error", "message": "Knowledge entry not found"}
+        return {"status": "success", "knowledge": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def update_knowledge(
+    knowledge_id: CoercedInt,
+    title: str,
+    content: str,
+    tags: str = "",
+) -> dict[str, Any]:
+    """Update a knowledge entry's title, content, and tags."""
+    conn = await get_connection()
+    try:
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+        row = await conn.fetchrow(
+            """
+            UPDATE public.project_knowledge
+            SET title = $2, content = $3, tags = $4, updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, project_id, title, content, tags, created_at, updated_at;
+            """,
+            knowledge_id, title, content, tag_list,
+        )
+        if not row:
+            return {"status": "error", "message": "Knowledge entry not found"}
+        return {"status": "success", "knowledge": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def delete_knowledge(knowledge_id: CoercedInt) -> dict[str, str]:
+    """Delete a knowledge entry by its ID."""
+    conn = await get_connection()
+    try:
+        result = await conn.execute(
+            "DELETE FROM public.project_knowledge WHERE id = $1;",
+            knowledge_id,
+        )
+        if int(result.split()[-1]) == 0:
+            return {"status": "error", "message": "Knowledge entry not found"}
+        return {"status": "success", "message": f"Knowledge entry {knowledge_id} deleted successfully"}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+# =============================================================================
+# ANALYTICS / VIEW TOOLS
+# =============================================================================
+
+@mcp.tool()
+async def get_budget_summary(project_id: CoercedInt = None) -> dict[str, Any]:
+    """Get budget vs expenses summary. Pass project_id to filter to one project, or omit for all."""
+    conn = await get_connection()
+    try:
+        if project_id:
+            rows = await conn.fetch(
+                "SELECT * FROM public.v_project_budget_summary WHERE project_id = $1;",
+                project_id,
+            )
+        else:
+            rows = await conn.fetch("SELECT * FROM public.v_project_budget_summary ORDER BY project_id;")
+        return list_result(rows)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def get_member_teams_view() -> dict[str, Any]:
+    """Get all members with their teams and departments (from v_member_teams view)."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch("SELECT * FROM public.v_member_teams ORDER BY member_name, team_name;")
+        return list_result(rows)
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def get_task_workload() -> dict[str, Any]:
+    """Get open task count per member (from v_task_workload view)."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch("SELECT * FROM public.v_task_workload ORDER BY open_tasks DESC;")
+        return list_result(rows)
     except Exception as exc:
         return {"status": "error", "message": str(exc)}
     finally:
