@@ -5,10 +5,15 @@ from typing import Annotated, Any
 import asyncpg
 from dotenv import load_dotenv
 from fastmcp import FastMCP
-from pydantic import BeforeValidator
+from pydantic import BeforeValidator, WithJsonSchema
 
-# Coerces "1" → 1 so LLMs that pass integer IDs as strings still work
-CoercedInt = Annotated[int, BeforeValidator(int)]
+# Accepts both integer 1 and string "1" in the JSON schema,
+# then coerces to int before the function runs.
+CoercedInt = Annotated[
+    int,
+    BeforeValidator(int),
+    WithJsonSchema({"anyOf": [{"type": "integer"}, {"type": "string"}]}),
+]
 
 # Load .env from the same folder as main.py
 ENV_PATH = Path(__file__).parent / ".env"
