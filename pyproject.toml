@@ -1,0 +1,10 @@
+[project]
+name = "postgres-member-mcp"
+version = "0.1.0"
+description = "Simple FastMCP server backed by PostgreSQL."
+requires-python = ">=3.11"
+dependencies = [
+    "asyncpg>=0.30.0",
+    "fastmcp>=2.0.0",
+    "python-dotenv>=1.0.1",
+]

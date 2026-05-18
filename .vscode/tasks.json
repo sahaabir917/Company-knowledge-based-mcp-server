@@ -1,0 +1,46 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "FastMCP HTTP Server",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\fastmcp.exe",
+      "args": [
+        "run",
+        "main.py",
+        "--transport",
+        "http",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8090"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "FastMCP Inspector",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\fastmcp.exe",
+      "args": [
+        "dev",
+        "inspector",
+        "main.py",
+        "--ui-port",
+        "6274",
+        "--server-port",
+        "6277"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "DANGEROUSLY_OMIT_AUTH": "true",
+          "MCP_PROXY_AUTH_TOKEN": "dev-token"
+        }
+      },
+      "problemMatcher": []
+    }
+  ]
+}
