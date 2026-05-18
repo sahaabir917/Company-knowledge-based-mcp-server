@@ -1,0 +1,21 @@
+Starting MCP inspector...
+⚙️ Proxy server listening on localhost:6277
+⚠️  WARNING: Authentication is disabled. This is not recommended.
+
+🚀 MCP Inspector is up and running at:
+   http://localhost:6274
+
+🌐 Opening browser...
+New StreamableHttp connection request
+Query parameters: {"url":"https://InfinityCodehubLtd.fastmcp.app/mcp","transportType":"streamable-http"}
+Created StreamableHttp client transport
+Client <-> Proxy  sessionId: 9b4af05c-cda3-450f-8fb8-83375de6157e
+New StreamableHttp connection request
+Query parameters: {"url":"https://InfinityCodehubLtd.fastmcp.app/mcp","transportType":"streamable-http"}
+Created StreamableHttp client transport
+Client <-> Proxy  sessionId: 4d98f410-356f-4984-b5fe-e8d0222fbfc7
+Received POST message for sessionId 4d98f410-356f-4984-b5fe-e8d0222fbfc7
+Received POST message for sessionId 4d98f410-356f-4984-b5fe-e8d0222fbfc7
+Received GET message for sessionId 4d98f410-356f-4984-b5fe-e8d0222fbfc7
+Received POST message for sessionId 4d98f410-356f-4984-b5fe-e8d0222fbfc7
+Received POST message for sessionId 4d98f410-356f-4984-b5fe-e8d0222fbfc7

@@ -1,0 +1,29 @@
+Error from MCP server: StreamableHTTPError: Streamable HTTP error: Error POSTing to endpoint: {"error":"invalid_request","error_description":"Bearer token required"}
+    at StreamableHTTPClientTransport.send (file:///C:/Users/sahaa/AppData/Local/npm-cache/_npx/5a9d879542beca3a/node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js:364:23)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {
+  code: 401
+}
+Proxy  <-> Server sessionId: 1e3a617e-9da6-4958-ac37-30c00f7d41ed
+Error: 
+🚀 MCP Inspector is up and running at:
+   http://localhost:6274
+
+🌐 Opening browser...
+
+Failed with exit code: 4294967295
+    at Object.error (C:\Users\sahaa\AppData\Local\npm-cache\_npx\5a9d879542beca3a\node_modules\spawn-rx\lib\src\index.js:314:27)
+    at ConsumerObserver.error (C:\Users\sahaa\AppData\Local\npm-cache\_npx\5a9d879542beca3a\node_modules\rxjs\dist\cjs\internal\Subscriber.js:124:33)
+    at Subscriber._error (C:\Users\sahaa\AppData\Local\npm-cache\_npx\5a9d879542beca3a\node_modules\rxjs\dist\cjs\internal\Subscriber.js:84:30)
+    at Subscriber.error (C:\Users\sahaa\AppData\Local\npm-cache\_npx\5a9d879542beca3a\node_modules\rxjs\dist\cjs\internal\Subscriber.js:60:18)
+    at Subscriber._error (C:\Users\sahaa\AppData\Local\npm-cache\_npx\5a9d879542beca3a\node_modules\rxjs\dist\cjs\internal\Subscriber.js:84:30)
+    at Subscriber.error (C:\Users\sahaa\AppData\Local\npm-cache\_npx\5a9d879542beca3a\node_modules\rxjs\dist\cjs\internal\Subscriber.js:60:18)
+    at Object.next (C:\Users\sahaa\AppData\Local\npm-cache\_npx\5a9d879542beca3a\node_modules\spawn-rx\lib\src\index.js:286:26)
+    at ConsumerObserver.next (C:\Users\sahaa\AppData\Local\npm-cache\_npx\5a9d879542beca3a\node_modules\rxjs\dist\cjs\internal\Subscriber.js:113:33)
+    at Subscriber._next (C:\Users\sahaa\AppData\Local\npm-cache\_npx\5a9d879542beca3a\node_modules\rxjs\dist\cjs\internal\Subscriber.js:80:26)
+    at Subscriber.next (C:\Users\sahaa\AppData\Local\npm-cache\_npx\5a9d879542beca3a\node_modules\rxjs\dist\cjs\internal\Subscriber.js:51:18) {
+  exitCode: 4294967295,
+  code: 4294967295
+}
+
+Failed with exit code: 1
+[05/17/26 22:12:36] ERROR    Dev server failed                       cli.py:317
