@@ -3,12 +3,8 @@ from datetime import datetime
 from typing import Any
 
 import asyncpg
-import uvicorn
 from fastmcp import FastMCP
 from dotenv import load_dotenv
-from starlette.middleware import Middleware
-from starlette.middleware.cors import CORSMiddleware
-
 
 load_dotenv()
 
@@ -29,10 +25,7 @@ def get_database_url() -> str:
 
 
 async def get_connection() -> asyncpg.Connection:
-    url = get_database_url()
-    if "localhost" not in url and "127.0.0.1" not in url:
-        return await asyncpg.connect(url, ssl="require")
-    return await asyncpg.connect(url)
+    return await asyncpg.connect(get_database_url())
 
 
 def serialize_member(row: asyncpg.Record) -> dict[str, Any]:
@@ -55,7 +48,6 @@ async def create_member_table() -> dict[str, str]:
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
     """
-
     conn = await get_connection()
     try:
         await conn.execute(sql)
@@ -108,11 +100,4 @@ async def list_members() -> list[dict[str, Any]] | dict[str, str]:
 
 
 if __name__ == "__main__":
-    app = mcp.http_app(
-        transport="http",
-        stateless_http=True,
-        middleware=[
-            Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]),
-        ],
-    )
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=8080)
