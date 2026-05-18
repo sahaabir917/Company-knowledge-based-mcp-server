@@ -5,15 +5,10 @@ from typing import Annotated, Any
 import asyncpg
 from dotenv import load_dotenv
 from fastmcp import FastMCP
-from pydantic import BeforeValidator, WithJsonSchema
+from pydantic import BeforeValidator
 
-# Accepts both integer 1 and string "1" in the JSON schema,
-# then coerces to int before the function runs.
-CoercedInt = Annotated[
-    int,
-    BeforeValidator(int),
-    WithJsonSchema({"anyOf": [{"type": "integer"}, {"type": "string"}]}),
-]
+# int | str → schema accepts both 1 and "1"; BeforeValidator casts to int before use
+CoercedInt = Annotated[int | str, BeforeValidator(int)]
 
 # Load .env from the same folder as main.py
 ENV_PATH = Path(__file__).parent / ".env"
