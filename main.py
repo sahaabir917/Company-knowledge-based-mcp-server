@@ -2,7 +2,6 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-
 import asyncpg
 from dotenv import load_dotenv
 from fastmcp import FastMCP
@@ -43,14 +42,19 @@ async def get_connection() -> asyncpg.Connection:
     )
 
 
-def serialize_member(row: asyncpg.Record) -> dict[str, Any]:
-    member = dict(row)
-
-    created_at = member.get("created_at")
+def serialize_row(row: asyncpg.Record) -> dict[str, Any]:
+    data = dict(row)
+    created_at = data.get("created_at")
     if isinstance(created_at, datetime):
-        member["created_at"] = created_at.isoformat()
+        data["created_at"] = created_at.isoformat()
+    updated_at = data.get("updated_at")
+    if isinstance(updated_at, datetime):
+        data["updated_at"] = updated_at.isoformat()
+    return data
 
-    return member
+
+# backward-compat alias
+serialize_member = serialize_row
 
 
 @mcp.tool()
@@ -215,6 +219,115 @@ async def delete_member(email: str) -> dict[str, str]:
             "status": "error",
             "message": str(exc),
         }
+    finally:
+        await conn.close()
+
+
+# =============================================================================
+# DEPARTMENT TOOLS
+# =============================================================================
+
+@mcp.tool()
+async def add_department(name: str, description: str = "") -> dict[str, Any]:
+    """Add a new department."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO public.department (name, description)
+            VALUES ($1, $2)
+            RETURNING id, name, description, created_at;
+            """,
+            name,
+            description,
+        )
+        return {"status": "success", "department": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def list_departments() -> list[dict[str, Any]] | dict[str, str]:
+    """List all departments."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT id, name, description, created_at
+            FROM public.department
+            ORDER BY id;
+            """
+        )
+        return [serialize_row(row) for row in rows]
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def get_department(department_id: int) -> dict[str, Any]:
+    """Get a department by its ID."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT id, name, description, created_at
+            FROM public.department
+            WHERE id = $1;
+            """,
+            department_id,
+        )
+        if not row:
+            return {"status": "error", "message": "Department not found"}
+        return {"status": "success", "department": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def update_department(department_id: int, name: str, description: str = "") -> dict[str, Any]:
+    """Update a department's name and description."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            UPDATE public.department
+            SET name = $2, description = $3
+            WHERE id = $1
+            RETURNING id, name, description, created_at;
+            """,
+            department_id,
+            name,
+            description,
+        )
+        if not row:
+            return {"status": "error", "message": "Department not found"}
+        return {"status": "success", "department": serialize_row(row)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+    finally:
+        await conn.close()
+
+
+@mcp.tool()
+async def delete_department(department_id: int) -> dict[str, str]:
+    """Delete a department by its ID."""
+    conn = await get_connection()
+    try:
+        result = await conn.execute(
+            "DELETE FROM public.department WHERE id = $1;",
+            department_id,
+        )
+        if int(result.split()[-1]) == 0:
+            return {"status": "error", "message": "Department not found"}
+        return {"status": "success", "message": f"Department {department_id} deleted successfully"}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
     finally:
         await conn.close()
 
