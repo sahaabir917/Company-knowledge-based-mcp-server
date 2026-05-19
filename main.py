@@ -532,10 +532,11 @@ async def list_departments() -> str:
 
 
 @mcp.tool(output_schema=None)
-async def get_department(department_id: int) -> str:
+async def get_department(department_id: int | str) -> str:
     """Get a department by ID."""
     conn = await get_connection()
     try:
+        department_id = required_int(department_id)
         row = await conn.fetchrow(
             """
             SELECT id, name, description, created_at
@@ -554,10 +555,11 @@ async def get_department(department_id: int) -> str:
 
 
 @mcp.tool(output_schema=None)
-async def update_department(department_id: int, name: str, description: str = "") -> str:
+async def update_department(department_id: int | str, name: str, description: str = "") -> str:
     """Update a department."""
     conn = await get_connection()
     try:
+        department_id = required_int(department_id)
         row = await conn.fetchrow(
             """
             UPDATE public.department
@@ -579,9 +581,10 @@ async def update_department(department_id: int, name: str, description: str = ""
 
 
 @mcp.tool(output_schema=None)
-async def delete_department(department_id: int) -> str:
+async def delete_department(department_id: int | str) -> str:
     """Delete a department by ID."""
     try:
+        department_id = required_int(department_id)
         result = await execute_status("DELETE FROM public.department WHERE id = $1;", department_id)
         if int(result.split()[-1]) == 0:
             return error("Department not found")
@@ -596,10 +599,11 @@ async def delete_department(department_id: int) -> str:
 
 
 @mcp.tool(output_schema=None)
-async def add_team(name: str, department_id: int, description: str = "") -> str:
+async def add_team(name: str, department_id: int | str, description: str = "") -> str:
     """Add a team under a department."""
     conn = await get_connection()
     try:
+        department_id = required_int(department_id)
         row = await conn.fetchrow(
             """
             INSERT INTO public.team (name, department_id, description)
@@ -641,10 +645,11 @@ async def list_teams(department_id: int | str = 0) -> str:
 
 
 @mcp.tool(output_schema=None)
-async def get_team(team_id: int) -> str:
+async def get_team(team_id: int | str) -> str:
     """Get a team by ID."""
     conn = await get_connection()
     try:
+        team_id = required_int(team_id)
         row = await conn.fetchrow(
             """
             SELECT t.id, t.name, t.department_id, d.name AS department_name, t.description, t.created_at
@@ -664,10 +669,12 @@ async def get_team(team_id: int) -> str:
 
 
 @mcp.tool(output_schema=None)
-async def update_team(team_id: int, name: str, department_id: int, description: str = "") -> str:
+async def update_team(team_id: int | str, name: str, department_id: int | str, description: str = "") -> str:
     """Update a team."""
     conn = await get_connection()
     try:
+        team_id = required_int(team_id)
+        department_id = required_int(department_id)
         row = await conn.fetchrow(
             """
             UPDATE public.team
@@ -690,9 +697,10 @@ async def update_team(team_id: int, name: str, department_id: int, description: 
 
 
 @mcp.tool(output_schema=None)
-async def delete_team(team_id: int) -> str:
+async def delete_team(team_id: int | str) -> str:
     """Delete a team by ID."""
     try:
+        team_id = required_int(team_id)
         result = await execute_status("DELETE FROM public.team WHERE id = $1;", team_id)
         if int(result.split()[-1]) == 0:
             return error("Team not found")
@@ -702,10 +710,12 @@ async def delete_team(team_id: int) -> str:
 
 
 @mcp.tool(output_schema=None)
-async def add_member_to_team(team_id: int, member_id: int) -> str:
+async def add_member_to_team(team_id: int | str, member_id: int | str) -> str:
     """Add a member to a team."""
     conn = await get_connection()
     try:
+        team_id = required_int(team_id)
+        member_id = required_int(member_id)
         row = await conn.fetchrow(
             """
             INSERT INTO public.team_member (team_id, member_id)
@@ -751,9 +761,11 @@ async def list_team_members(team_id: int | str = 0, member_id: int | str = 0) ->
 
 
 @mcp.tool(output_schema=None)
-async def remove_member_from_team(team_id: int, member_id: int) -> str:
+async def remove_member_from_team(team_id: int | str, member_id: int | str) -> str:
     """Remove a member from a team."""
     try:
+        team_id = required_int(team_id)
+        member_id = required_int(member_id)
         result = await execute_status(
             "DELETE FROM public.team_member WHERE team_id = $1 AND member_id = $2;",
             team_id,
@@ -774,7 +786,7 @@ async def remove_member_from_team(team_id: int, member_id: int) -> str:
 @mcp.tool(output_schema=None)
 async def add_project(
     name: str,
-    team_id: int,
+    team_id: int | str,
     description: str = "",
     status: str = "active",
     start_date: str = "",
@@ -783,6 +795,7 @@ async def add_project(
     """Add a project. Date values should be YYYY-MM-DD or empty."""
     conn = await get_connection()
     try:
+        team_id = required_int(team_id)
         row = await conn.fetchrow(
             """
             INSERT INTO public.project (name, team_id, description, status, start_date, end_date)
@@ -830,10 +843,11 @@ async def list_projects(team_id: int | str = 0, status: str = "") -> str:
 
 
 @mcp.tool(output_schema=None)
-async def get_project(project_id: int) -> str:
+async def get_project(project_id: int | str) -> str:
     """Get a project by ID."""
     conn = await get_connection()
     try:
+        project_id = required_int(project_id)
         row = await conn.fetchrow(
             """
             SELECT p.id, p.name, p.team_id, t.name AS team_name, p.description, p.status,
@@ -855,9 +869,9 @@ async def get_project(project_id: int) -> str:
 
 @mcp.tool(output_schema=None)
 async def update_project(
-    project_id: int,
+    project_id: int | str,
     name: str,
-    team_id: int,
+    team_id: int | str,
     description: str = "",
     status: str = "active",
     start_date: str = "",
@@ -866,6 +880,8 @@ async def update_project(
     """Update a project."""
     conn = await get_connection()
     try:
+        project_id = required_int(project_id)
+        team_id = required_int(team_id)
         row = await conn.fetchrow(
             """
             UPDATE public.project
@@ -896,9 +912,10 @@ async def update_project(
 
 
 @mcp.tool(output_schema=None)
-async def delete_project(project_id: int) -> str:
+async def delete_project(project_id: int | str) -> str:
     """Delete a project by ID."""
     try:
+        project_id = required_int(project_id)
         result = await execute_status("DELETE FROM public.project WHERE id = $1;", project_id)
         if int(result.split()[-1]) == 0:
             return error("Project not found")
@@ -915,7 +932,7 @@ async def delete_project(project_id: int) -> str:
 @mcp.tool(output_schema=None)
 async def add_task(
     title: str,
-    project_id: int,
+    project_id: int | str,
     description: str = "",
     status: str = "todo",
     priority: str = "medium",
@@ -924,6 +941,7 @@ async def add_task(
     """Add a task. due_date should be YYYY-MM-DD or empty."""
     conn = await get_connection()
     try:
+        project_id = required_int(project_id)
         row = await conn.fetchrow(
             """
             INSERT INTO public.task (title, project_id, description, status, priority, due_date)
@@ -973,10 +991,11 @@ async def list_tasks(project_id: int | str = 0, status: str = "", priority: str 
 
 
 @mcp.tool(output_schema=None)
-async def get_task(task_id: int) -> str:
+async def get_task(task_id: int | str) -> str:
     """Get a task by ID."""
     conn = await get_connection()
     try:
+        task_id = required_int(task_id)
         row = await conn.fetchrow(
             """
             SELECT tk.id, tk.title, tk.project_id, p.name AS project_name, tk.description,
@@ -998,9 +1017,9 @@ async def get_task(task_id: int) -> str:
 
 @mcp.tool(output_schema=None)
 async def update_task(
-    task_id: int,
+    task_id: int | str,
     title: str,
-    project_id: int,
+    project_id: int | str,
     description: str = "",
     status: str = "todo",
     priority: str = "medium",
@@ -1009,6 +1028,8 @@ async def update_task(
     """Update a task."""
     conn = await get_connection()
     try:
+        task_id = required_int(task_id)
+        project_id = required_int(project_id)
         row = await conn.fetchrow(
             """
             UPDATE public.task
@@ -1039,9 +1060,10 @@ async def update_task(
 
 
 @mcp.tool(output_schema=None)
-async def delete_task(task_id: int) -> str:
+async def delete_task(task_id: int | str) -> str:
     """Delete a task by ID."""
     try:
+        task_id = required_int(task_id)
         result = await execute_status("DELETE FROM public.task WHERE id = $1;", task_id)
         if int(result.split()[-1]) == 0:
             return error("Task not found")
@@ -1051,10 +1073,12 @@ async def delete_task(task_id: int) -> str:
 
 
 @mcp.tool(output_schema=None)
-async def assign_task(task_id: int, member_id: int) -> str:
+async def assign_task(task_id: int | str, member_id: int | str) -> str:
     """Assign a task to a member."""
     conn = await get_connection()
     try:
+        task_id = required_int(task_id)
+        member_id = required_int(member_id)
         row = await conn.fetchrow(
             """
             INSERT INTO public.task_assignee (task_id, member_id)
@@ -1101,9 +1125,11 @@ async def list_task_assignees(task_id: int | str = 0, member_id: int | str = 0) 
 
 
 @mcp.tool(output_schema=None)
-async def unassign_task(task_id: int, member_id: int) -> str:
+async def unassign_task(task_id: int | str, member_id: int | str) -> str:
     """Remove a task assignment."""
     try:
+        task_id = required_int(task_id)
+        member_id = required_int(member_id)
         result = await execute_status(
             "DELETE FROM public.task_assignee WHERE task_id = $1 AND member_id = $2;",
             task_id,
@@ -1123,8 +1149,8 @@ async def unassign_task(task_id: int, member_id: int) -> str:
 
 @mcp.tool(output_schema=None)
 async def upsert_project_budget(
-    project_id: int,
-    total_amount: float,
+    project_id: int | str,
+    total_amount: float | int | str,
     currency: str = "USD",
     approved_by: str = "",
     approved_at: str = "",
@@ -1133,6 +1159,8 @@ async def upsert_project_budget(
     """Create or update a project's budget. approved_at should be ISO timestamp or empty."""
     conn = await get_connection()
     try:
+        project_id = required_int(project_id)
+        total_amount = required_float(total_amount)
         row = await conn.fetchrow(
             """
             INSERT INTO public.project_budget (project_id, total_amount, currency, approved_by, approved_at, notes)
@@ -1184,10 +1212,11 @@ async def list_project_budgets(project_id: int | str = 0) -> str:
 
 
 @mcp.tool(output_schema=None)
-async def get_project_budget(project_id: int) -> str:
+async def get_project_budget(project_id: int | str) -> str:
     """Get one project's budget."""
     conn = await get_connection()
     try:
+        project_id = required_int(project_id)
         row = await conn.fetchrow(
             """
             SELECT pb.id, pb.project_id, p.name AS project_name, pb.total_amount, pb.currency,
@@ -1208,9 +1237,10 @@ async def get_project_budget(project_id: int) -> str:
 
 
 @mcp.tool(output_schema=None)
-async def delete_project_budget(project_id: int) -> str:
+async def delete_project_budget(project_id: int | str) -> str:
     """Delete a project's budget."""
     try:
+        project_id = required_int(project_id)
         result = await execute_status("DELETE FROM public.project_budget WHERE project_id = $1;", project_id)
         if int(result.split()[-1]) == 0:
             return error("Project budget not found")
@@ -1221,17 +1251,20 @@ async def delete_project_budget(project_id: int) -> str:
 
 @mcp.tool(output_schema=None)
 async def add_project_expense(
-    project_id: int,
+    project_id: int | str,
     title: str,
-    amount: float,
+    amount: float | int | str,
     category: str = "",
     incurred_at: str = "",
-    recorded_by_member_id: int = 0,
+    recorded_by_member_id: int | str = 0,
     notes: str = "",
 ) -> str:
     """Add a project expense. incurred_at should be YYYY-MM-DD or empty for today."""
     conn = await get_connection()
     try:
+        project_id = required_int(project_id)
+        amount = required_float(amount)
+        recorded_by_member_id = int_filter(recorded_by_member_id)
         row = await conn.fetchrow(
             """
             INSERT INTO public.project_expense
@@ -1283,10 +1316,11 @@ async def list_project_expenses(project_id: int | str = 0, category: str = "") -
 
 
 @mcp.tool(output_schema=None)
-async def get_project_expense(expense_id: int) -> str:
+async def get_project_expense(expense_id: int | str) -> str:
     """Get one project expense by ID."""
     conn = await get_connection()
     try:
+        expense_id = required_int(expense_id)
         row = await conn.fetchrow(
             """
             SELECT pe.id, pe.project_id, p.name AS project_name, pe.title, pe.amount, pe.category,
@@ -1310,18 +1344,22 @@ async def get_project_expense(expense_id: int) -> str:
 
 @mcp.tool(output_schema=None)
 async def update_project_expense(
-    expense_id: int,
-    project_id: int,
+    expense_id: int | str,
+    project_id: int | str,
     title: str,
-    amount: float,
+    amount: float | int | str,
     category: str = "",
     incurred_at: str = "",
-    recorded_by_member_id: int = 0,
+    recorded_by_member_id: int | str = 0,
     notes: str = "",
 ) -> str:
     """Update a project expense. incurred_at should be YYYY-MM-DD or empty for today."""
     conn = await get_connection()
     try:
+        expense_id = required_int(expense_id)
+        project_id = required_int(project_id)
+        amount = required_float(amount)
+        recorded_by_member_id = int_filter(recorded_by_member_id)
         row = await conn.fetchrow(
             """
             UPDATE public.project_expense
@@ -1355,9 +1393,10 @@ async def update_project_expense(
 
 
 @mcp.tool(output_schema=None)
-async def delete_project_expense(expense_id: int) -> str:
+async def delete_project_expense(expense_id: int | str) -> str:
     """Delete a project expense by ID."""
     try:
+        expense_id = required_int(expense_id)
         result = await execute_status("DELETE FROM public.project_expense WHERE id = $1;", expense_id)
         if int(result.split()[-1]) == 0:
             return error("Project expense not found")
@@ -1368,15 +1407,17 @@ async def delete_project_expense(expense_id: int) -> str:
 
 @mcp.tool(output_schema=None)
 async def add_project_knowledge(
-    project_id: int,
+    project_id: int | str,
     title: str,
     content: str,
     tags_csv: str = "",
-    author_member_id: int = 0,
+    author_member_id: int | str = 0,
 ) -> str:
     """Add a project knowledge entry. tags_csv should be comma-separated."""
     conn = await get_connection()
     try:
+        project_id = required_int(project_id)
+        author_member_id = int_filter(author_member_id)
         row = await conn.fetchrow(
             """
             INSERT INTO public.project_knowledge (project_id, title, content, tags, author_member_id)
@@ -1424,10 +1465,11 @@ async def list_project_knowledge(project_id: int | str = 0, tag: str = "") -> st
 
 
 @mcp.tool(output_schema=None)
-async def get_project_knowledge(knowledge_id: int) -> str:
+async def get_project_knowledge(knowledge_id: int | str) -> str:
     """Get one project knowledge entry by ID."""
     conn = await get_connection()
     try:
+        knowledge_id = required_int(knowledge_id)
         row = await conn.fetchrow(
             """
             SELECT pk.id, pk.project_id, p.name AS project_name, pk.title, pk.content, pk.tags,
@@ -1450,15 +1492,17 @@ async def get_project_knowledge(knowledge_id: int) -> str:
 
 @mcp.tool(output_schema=None)
 async def update_project_knowledge(
-    knowledge_id: int,
+    knowledge_id: int | str,
     title: str,
     content: str,
     tags_csv: str = "",
-    author_member_id: int = 0,
+    author_member_id: int | str = 0,
 ) -> str:
     """Update a project knowledge entry."""
     conn = await get_connection()
     try:
+        knowledge_id = required_int(knowledge_id)
+        author_member_id = int_filter(author_member_id)
         row = await conn.fetchrow(
             """
             UPDATE public.project_knowledge
@@ -1486,9 +1530,10 @@ async def update_project_knowledge(
 
 
 @mcp.tool(output_schema=None)
-async def delete_project_knowledge(knowledge_id: int) -> str:
+async def delete_project_knowledge(knowledge_id: int | str) -> str:
     """Delete a project knowledge entry by ID."""
     try:
+        knowledge_id = required_int(knowledge_id)
         result = await execute_status("DELETE FROM public.project_knowledge WHERE id = $1;", knowledge_id)
         if int(result.split()[-1]) == 0:
             return error("Project knowledge entry not found")
@@ -1509,16 +1554,18 @@ async def add_policy_rule(
     category: str = "",
     description: str = "",
     max_leave_days_per_request: float | int | str = "",
-    applies_to_project_id: int = 0,
+    applies_to_project_id: int | str = 0,
     effective_from: str = "",
     effective_to: str = "",
     status: str = "active",
-    created_by_member_id: int = 0,
+    created_by_member_id: int | str = 0,
 ) -> str:
     """Create a policy rule such as project revenue, delivery, hiring, or leave."""
     conn = await get_connection()
     try:
         max_leave_days_per_request = optional_float(max_leave_days_per_request)
+        applies_to_project_id = int_filter(applies_to_project_id)
+        created_by_member_id = int_filter(created_by_member_id)
         row = await conn.fetchrow(
             """
             INSERT INTO public.policy_rule
@@ -1581,10 +1628,11 @@ async def list_policy_rules(category: str = "", status: str = "", project_id: in
 
 
 @mcp.tool(output_schema=None)
-async def get_policy_rule(policy_rule_id: int) -> str:
+async def get_policy_rule(policy_rule_id: int | str) -> str:
     """Get one policy rule by ID."""
     conn = await get_connection()
     try:
+        policy_rule_id = required_int(policy_rule_id)
         row = await conn.fetchrow(
             """
             SELECT pr.id, pr.name, pr.category, pr.description, pr.rule_text,
@@ -1611,22 +1659,25 @@ async def get_policy_rule(policy_rule_id: int) -> str:
 
 @mcp.tool(output_schema=None)
 async def update_policy_rule(
-    policy_rule_id: int,
+    policy_rule_id: int | str,
     name: str,
     rule_text: str,
     category: str = "",
     description: str = "",
     max_leave_days_per_request: float | int | str = "",
-    applies_to_project_id: int = 0,
+    applies_to_project_id: int | str = 0,
     effective_from: str = "",
     effective_to: str = "",
     status: str = "active",
-    created_by_member_id: int = 0,
+    created_by_member_id: int | str = 0,
 ) -> str:
     """Update a policy rule."""
     conn = await get_connection()
     try:
+        policy_rule_id = required_int(policy_rule_id)
         max_leave_days_per_request = optional_float(max_leave_days_per_request)
+        applies_to_project_id = int_filter(applies_to_project_id)
+        created_by_member_id = int_filter(created_by_member_id)
         row = await conn.fetchrow(
             """
             UPDATE public.policy_rule
@@ -1667,9 +1718,10 @@ async def update_policy_rule(
 
 
 @mcp.tool(output_schema=None)
-async def delete_policy_rule(policy_rule_id: int) -> str:
+async def delete_policy_rule(policy_rule_id: int | str) -> str:
     """Delete a policy rule by ID."""
     try:
+        policy_rule_id = required_int(policy_rule_id)
         result = await execute_status("DELETE FROM public.policy_rule WHERE id = $1;", policy_rule_id)
         if int(result.split()[-1]) == 0:
             return error("Policy rule not found")
