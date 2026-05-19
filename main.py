@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -105,7 +105,8 @@ def rows_payload(name: str, rows: list[asyncpg.Record]) -> str:
 
 
 def tags_from_csv(tags_csv: str) -> list[str]:
-    return [tag.strip() for tag in tags_csv.split(",") if tag.strip()]
+    values = re.split(r"\s*(?:,|;|/|&|\band\b|\bthen\b|->)\s*", tags_csv, flags=re.IGNORECASE)
+    return [tag.strip() for tag in values if tag.strip()]
 
 
 def ints_from_csv(values_csv: str) -> list[int]:
@@ -122,14 +123,41 @@ def required_int(value: int | str) -> int:
     return int(value)
 
 
-def required_float(value: float | int | str) -> float:
+def number_value(value: float | int | str | None, default: float = 0) -> float:
+    if value in (None, ""):
+        return default
+    if isinstance(value, str):
+        cleaned = value.replace(",", "").strip()
+        match = re.search(r"-?\d+(?:\.\d+)?", cleaned)
+        if not match:
+            return default
+        return float(match.group(0))
     return float(value)
+
+
+def required_float(value: float | int | str) -> float:
+    return number_value(value)
 
 
 def optional_float(value: float | int | str | None) -> float | None:
     if value in (None, ""):
         return None
-    return float(value)
+    return number_value(value)
+
+
+def normalize_date_string(value: str) -> str:
+    value = value.strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(value, fmt).date().isoformat()
+        except ValueError:
+            pass
+    return value
+
+
+def end_date_from_start(start_date: str, days_requested: float) -> str:
+    whole_days = max(int(days_requested), 1)
+    return (datetime.strptime(start_date, "%Y-%m-%d").date() + timedelta(days=whole_days - 1)).isoformat()
 
 
 async def execute_status(sql: str, *args: Any) -> str:
@@ -216,6 +244,104 @@ async def get_leave_day_policy_limit(
             policy["matched_leave_type"] = leave_type
             return float(limit), policy
     return None, None
+
+
+def normalize_approver_role(role: str) -> str:
+    normalized = role.strip()
+    key = normalized.lower().replace("_", " ").replace("-", " ")
+    role_aliases = {
+        "hr": "HR Manager",
+        "human resources": "HR Manager",
+        "project lead": "Project Lead",
+        "lead": "Project Lead",
+        "manager": "Engineering Manager",
+        "ceo": "CEO",
+        "cto": "CTO",
+        "ceo/cto": "CEO/CTO",
+        "executive": "CEO/CTO",
+    }
+    return role_aliases.get(key, normalized)
+
+
+async def get_default_leave_approval_roles(conn: asyncpg.Connection, project_id: int, start_date: str) -> list[str]:
+    rows = await conn.fetch(
+        """
+        SELECT rule_text
+        FROM public.policy_rule
+        WHERE status = 'active'
+          AND category = 'leave'
+          AND ($1::int = 0 OR applies_to_project_id IS NULL OR applies_to_project_id = $1)
+          AND (effective_from IS NULL OR effective_from <= $2::text::date)
+          AND (effective_to IS NULL OR effective_to >= $2::text::date)
+        ORDER BY applies_to_project_id NULLS LAST, updated_at DESC, id DESC;
+        """,
+        project_id,
+        start_date,
+    )
+    for row in rows:
+        text = row["rule_text"].lower()
+        roles: list[str] = []
+        if "project lead" in text:
+            roles.append("Project Lead")
+        elif "manager" in text:
+            roles.append("Engineering Manager")
+        if "hr" in text:
+            roles.append("HR Manager")
+        if "ceo" in text and "cto" in text:
+            roles.append("CEO/CTO")
+        elif "ceo" in text:
+            roles.append("CEO")
+        elif "cto" in text:
+            roles.append("CTO")
+        if roles:
+            return roles
+    return ["HR Manager"]
+
+
+async def insert_leave_approval_steps(
+    conn: asyncpg.Connection,
+    leave_request_id: int,
+    start_date: str,
+    project_id: int,
+    approver_roles_csv: str,
+    approver_member_ids_csv: str,
+) -> list[asyncpg.Record]:
+    approval_order = 1
+    approval_rows: list[asyncpg.Record] = []
+    roles = [normalize_approver_role(role) for role in tags_from_csv(approver_roles_csv)]
+    if not roles and not tags_from_csv(approver_member_ids_csv):
+        roles = await get_default_leave_approval_roles(conn, project_id, start_date)
+
+    for role in roles:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO public.leave_approval (leave_request_id, approval_order, approver_role)
+            VALUES ($1, $2, $3)
+            RETURNING id, leave_request_id, approval_order, approver_role, approver_member_id,
+                      status, decision_by_member_id, decision_at, comments, created_at;
+            """,
+            leave_request_id,
+            approval_order,
+            role,
+        )
+        approval_rows.append(row)
+        approval_order += 1
+
+    for approver_member_id in ints_from_csv(approver_member_ids_csv):
+        row = await conn.fetchrow(
+            """
+            INSERT INTO public.leave_approval (leave_request_id, approval_order, approver_member_id)
+            VALUES ($1, $2, $3)
+            RETURNING id, leave_request_id, approval_order, approver_role, approver_member_id,
+                      status, decision_by_member_id, decision_at, comments, created_at;
+            """,
+            leave_request_id,
+            approval_order,
+            approver_member_id,
+        )
+        approval_rows.append(row)
+        approval_order += 1
+    return approval_rows
 
 
 @mcp.tool(output_schema=None)
@@ -1569,8 +1695,8 @@ async def add_employee_benefit(
     conn = await get_connection()
     try:
         member_id = required_int(member_id)
-        amount = required_float(amount)
-        balance_days = required_float(balance_days)
+        amount = number_value(amount)
+        balance_days = number_value(balance_days)
         row = await conn.fetchrow(
             """
             INSERT INTO public.employee_benefit
@@ -1646,8 +1772,8 @@ async def update_employee_benefit(
     conn = await get_connection()
     try:
         benefit_id = required_int(benefit_id)
-        amount = required_float(amount)
-        balance_days = required_float(balance_days)
+        amount = number_value(amount)
+        balance_days = number_value(balance_days)
         row = await conn.fetchrow(
             """
             UPDATE public.employee_benefit
@@ -1686,9 +1812,10 @@ async def update_employee_benefit(
 
 
 @mcp.tool(output_schema=None)
-async def delete_employee_benefit(benefit_id: int) -> str:
+async def delete_employee_benefit(benefit_id: int | str) -> str:
     """Delete an employee benefit by ID."""
     try:
+        benefit_id = required_int(benefit_id)
         result = await execute_status("DELETE FROM public.employee_benefit WHERE id = $1;", benefit_id)
         if int(result.split()[-1]) == 0:
             return error("Employee benefit not found")
@@ -1701,8 +1828,8 @@ async def delete_employee_benefit(benefit_id: int) -> str:
 async def create_leave_request(
     member_id: int | str,
     start_date: str,
-    end_date: str,
     days_requested: float | int | str,
+    end_date: str = "",
     leave_type: str = "annual",
     reason: str = "",
     project_id: int | str = 0,
@@ -1715,6 +1842,8 @@ async def create_leave_request(
         member_id = required_int(member_id)
         days_requested = required_float(days_requested)
         project_id = int_filter(project_id)
+        start_date = normalize_date_string(start_date)
+        end_date = end_date_from_start(start_date, days_requested) if not end_date else normalize_date_string(end_date)
         async with conn.transaction():
             limit, policy = await get_leave_day_policy_limit(conn, leave_type, project_id, start_date)
             if limit is not None and days_requested > limit:
@@ -1738,31 +1867,19 @@ async def create_leave_request(
                 days_requested,
                 reason,
             )
-            approval_order = 1
-            for role in tags_from_csv(approver_roles_csv):
-                await conn.execute(
-                    """
-                    INSERT INTO public.leave_approval (leave_request_id, approval_order, approver_role)
-                    VALUES ($1, $2, $3);
-                    """,
-                    request_row["id"],
-                    approval_order,
-                    role,
-                )
-                approval_order += 1
-            for approver_member_id in ints_from_csv(approver_member_ids_csv):
-                await conn.execute(
-                    """
-                    INSERT INTO public.leave_approval (leave_request_id, approval_order, approver_member_id)
-                    VALUES ($1, $2, $3);
-                    """,
-                    request_row["id"],
-                    approval_order,
-                    approver_member_id,
-                )
-                approval_order += 1
+            approval_rows = await insert_leave_approval_steps(
+                conn,
+                request_row["id"],
+                start_date,
+                project_id,
+                approver_roles_csv,
+                approver_member_ids_csv,
+            )
             request_row = await refresh_leave_request_status(conn, request_row["id"])
-        return ok(leave_request=serialize_row(request_row))
+        return ok(
+            leave_request=serialize_row(request_row),
+            approvals=[serialize_row(row) for row in approval_rows],
+        )
     except Exception as exc:
         return error(str(exc))
     finally:
@@ -1834,6 +1951,61 @@ async def get_leave_request(leave_request_id: int | str) -> str:
 
 
 @mcp.tool(output_schema=None)
+async def cancel_leave_request(
+    leave_request_id: int | str,
+    cancelled_by_member_id: int | str = 0,
+    comments: str = "",
+) -> str:
+    """Cancel a leave request and skip any pending approval steps."""
+    conn = await get_connection()
+    try:
+        leave_request_id = required_int(leave_request_id)
+        cancelled_by_member_id = int_filter(cancelled_by_member_id)
+        async with conn.transaction():
+            request_row = await conn.fetchrow(
+                """
+                UPDATE public.leave_request
+                SET status = 'cancelled',
+                    final_decision_at = NOW()
+                WHERE id = $1
+                  AND status IN ('pending', 'approved')
+                RETURNING id, member_id, project_id, leave_type, start_date, end_date,
+                          days_requested, reason, status, requested_at, final_decision_at;
+                """,
+                leave_request_id,
+            )
+            if not request_row:
+                return error("Leave request not found or cannot be cancelled")
+            approval_rows = await conn.fetch(
+                """
+                UPDATE public.leave_approval
+                SET status = 'skipped',
+                    decision_by_member_id = NULLIF($2, 0),
+                    decision_at = NOW(),
+                    comments = CASE
+                        WHEN $3::text = '' THEN 'Cancelled by requester or administrator'
+                        ELSE $3
+                    END
+                WHERE leave_request_id = $1
+                  AND status = 'pending'
+                RETURNING id, leave_request_id, approval_order, approver_role, approver_member_id,
+                          status, decision_by_member_id, decision_at, comments, created_at;
+                """,
+                leave_request_id,
+                cancelled_by_member_id,
+                comments,
+            )
+        return ok(
+            leave_request=serialize_row(request_row),
+            skipped_approvals=[serialize_row(row) for row in approval_rows],
+        )
+    except Exception as exc:
+        return error(str(exc))
+    finally:
+        await conn.close()
+
+
+@mcp.tool(output_schema=None)
 async def add_leave_approval_step(
     leave_request_id: int | str,
     approval_order: int | str,
@@ -1846,6 +2018,7 @@ async def add_leave_approval_step(
         leave_request_id = required_int(leave_request_id)
         approval_order = required_int(approval_order)
         approver_member_id = int_filter(approver_member_id)
+        approver_role = normalize_approver_role(approver_role) if approver_role else ""
         row = await conn.fetchrow(
             """
             INSERT INTO public.leave_approval
