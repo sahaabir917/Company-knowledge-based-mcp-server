@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS public.policy_rule (
     category             TEXT        NOT NULL DEFAULT '',
     description          TEXT        NOT NULL DEFAULT '',
     rule_text            TEXT        NOT NULL,
+    max_leave_days_per_request NUMERIC(8, 2),
     applies_to_project_id INT        REFERENCES public.project(id) ON DELETE CASCADE,
     effective_from       DATE,
     effective_to         DATE,
@@ -177,6 +178,9 @@ CREATE TABLE IF NOT EXISTS public.leave_approval (
     CHECK (approver_role <> '' OR approver_member_id IS NOT NULL)
 );
 
+ALTER TABLE public.policy_rule
+    ADD COLUMN IF NOT EXISTS max_leave_days_per_request NUMERIC(8, 2);
+
 
 -- -----------------------------------------------------------------------------
 -- 2. INDEXES
@@ -196,6 +200,7 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_project      ON public.project_knowledg
 CREATE INDEX IF NOT EXISTS idx_knowledge_tags         ON public.project_knowledge USING GIN (tags);
 CREATE INDEX IF NOT EXISTS idx_policy_category        ON public.policy_rule(category);
 CREATE INDEX IF NOT EXISTS idx_policy_status          ON public.policy_rule(status);
+CREATE INDEX IF NOT EXISTS idx_policy_leave_limit     ON public.policy_rule(max_leave_days_per_request);
 CREATE INDEX IF NOT EXISTS idx_benefit_member         ON public.employee_benefit(member_id);
 CREATE INDEX IF NOT EXISTS idx_benefit_type           ON public.employee_benefit(benefit_type);
 CREATE INDEX IF NOT EXISTS idx_leave_member           ON public.leave_request(member_id);
@@ -554,6 +559,12 @@ SET category = EXCLUDED.category,
     status = EXCLUDED.status,
     created_by_member_id = EXCLUDED.created_by_member_id,
     updated_at = NOW();
+
+UPDATE public.policy_rule
+SET max_leave_days_per_request = 5,
+    rule_text = 'One member cannot take more than 5 days leave at a time. Leave requests require approval from project lead or manager, then HR, then executive approval for long leave or critical coverage periods.',
+    updated_at = NOW()
+WHERE name = 'Leave Approval Policy';
 
 INSERT INTO public.employee_benefit (member_id, benefit_type, title, amount, currency, balance_days, effective_from, status, notes)
 SELECT m.id, 'salary', 'Base Salary', 6500.00, 'USD', NULL, '2026-01-01', 'active', 'Monthly base salary'

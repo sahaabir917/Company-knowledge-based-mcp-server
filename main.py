@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -125,6 +126,12 @@ def required_float(value: float | int | str) -> float:
     return float(value)
 
 
+def optional_float(value: float | int | str | None) -> float | None:
+    if value in (None, ""):
+        return None
+    return float(value)
+
+
 async def execute_status(sql: str, *args: Any) -> str:
     conn = await get_connection()
     try:
@@ -163,6 +170,52 @@ async def refresh_leave_request_status(conn: asyncpg.Connection, leave_request_i
         """,
         leave_request_id,
     )
+
+
+def extract_leave_day_limit(rule_text: str) -> float | None:
+    text = rule_text.lower()
+    if "leave" not in text or "day" not in text:
+        return None
+    patterns = [
+        r"(?:more than|over|exceed|exceeds|maximum|max|up to|at most|cannot take more than)\s+(\d+(?:\.\d+)?)\s+days?",
+        r"(\d+(?:\.\d+)?)\s+days?\s+(?:at a time|per request|maximum|max)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return float(match.group(1))
+    return None
+
+
+async def get_leave_day_policy_limit(
+    conn: asyncpg.Connection,
+    leave_type: str,
+    project_id: int,
+    start_date: str,
+) -> tuple[float | None, dict[str, Any] | None]:
+    rows = await conn.fetch(
+        """
+        SELECT id, name, category, rule_text, max_leave_days_per_request
+        FROM public.policy_rule
+        WHERE status = 'active'
+          AND category = 'leave'
+          AND ($1::int = 0 OR applies_to_project_id IS NULL OR applies_to_project_id = $1)
+          AND (effective_from IS NULL OR effective_from <= $2::text::date)
+          AND (effective_to IS NULL OR effective_to >= $2::text::date)
+        ORDER BY applies_to_project_id NULLS LAST, updated_at DESC, id DESC;
+        """,
+        project_id,
+        start_date,
+    )
+    for row in rows:
+        limit = serialize_value(row["max_leave_days_per_request"])
+        if limit is None:
+            limit = extract_leave_day_limit(row["rule_text"])
+        if limit is not None:
+            policy = serialize_row(row)
+            policy["matched_leave_type"] = leave_type
+            return float(limit), policy
+    return None, None
 
 
 @mcp.tool(output_schema=None)
@@ -1329,6 +1382,7 @@ async def add_policy_rule(
     rule_text: str,
     category: str = "",
     description: str = "",
+    max_leave_days_per_request: float | int | str = "",
     applies_to_project_id: int = 0,
     effective_from: str = "",
     effective_to: str = "",
@@ -1338,20 +1392,22 @@ async def add_policy_rule(
     """Create a policy rule such as project revenue, delivery, hiring, or leave."""
     conn = await get_connection()
     try:
+        max_leave_days_per_request = optional_float(max_leave_days_per_request)
         row = await conn.fetchrow(
             """
             INSERT INTO public.policy_rule
-                (name, category, description, rule_text, applies_to_project_id,
+                (name, category, description, rule_text, max_leave_days_per_request, applies_to_project_id,
                  effective_from, effective_to, status, created_by_member_id)
-            VALUES ($1, $2, $3, $4, NULLIF($5, 0), NULLIF($6, '')::date,
-                    NULLIF($7, '')::date, $8, NULLIF($9, 0))
-            RETURNING id, name, category, description, rule_text, applies_to_project_id,
+            VALUES ($1, $2, $3, $4, $5, NULLIF($6, 0), NULLIF($7, '')::date,
+                    NULLIF($8, '')::date, $9, NULLIF($10, 0))
+            RETURNING id, name, category, description, rule_text, max_leave_days_per_request, applies_to_project_id,
                       effective_from, effective_to, status, created_by_member_id, created_at, updated_at;
             """,
             name,
             category,
             description,
             rule_text,
+            max_leave_days_per_request,
             applies_to_project_id,
             effective_from,
             effective_to,
@@ -1374,6 +1430,7 @@ async def list_policy_rules(category: str = "", status: str = "", project_id: in
         rows = await conn.fetch(
             """
             SELECT pr.id, pr.name, pr.category, pr.description, pr.rule_text,
+                   pr.max_leave_days_per_request,
                    pr.applies_to_project_id, p.name AS applies_to_project_name,
                    pr.effective_from, pr.effective_to, pr.status,
                    pr.created_by_member_id, m.name AS created_by_member_name,
@@ -1405,6 +1462,7 @@ async def get_policy_rule(policy_rule_id: int) -> str:
         row = await conn.fetchrow(
             """
             SELECT pr.id, pr.name, pr.category, pr.description, pr.rule_text,
+                   pr.max_leave_days_per_request,
                    pr.applies_to_project_id, p.name AS applies_to_project_name,
                    pr.effective_from, pr.effective_to, pr.status,
                    pr.created_by_member_id, m.name AS created_by_member_name,
@@ -1432,6 +1490,7 @@ async def update_policy_rule(
     rule_text: str,
     category: str = "",
     description: str = "",
+    max_leave_days_per_request: float | int | str = "",
     applies_to_project_id: int = 0,
     effective_from: str = "",
     effective_to: str = "",
@@ -1441,6 +1500,7 @@ async def update_policy_rule(
     """Update a policy rule."""
     conn = await get_connection()
     try:
+        max_leave_days_per_request = optional_float(max_leave_days_per_request)
         row = await conn.fetchrow(
             """
             UPDATE public.policy_rule
@@ -1448,14 +1508,15 @@ async def update_policy_rule(
                 category = $3,
                 description = $4,
                 rule_text = $5,
-                applies_to_project_id = NULLIF($6, 0),
-                effective_from = NULLIF($7, '')::date,
-                effective_to = NULLIF($8, '')::date,
-                status = $9,
-                created_by_member_id = NULLIF($10, 0),
+                max_leave_days_per_request = $6,
+                applies_to_project_id = NULLIF($7, 0),
+                effective_from = NULLIF($8, '')::date,
+                effective_to = NULLIF($9, '')::date,
+                status = $10,
+                created_by_member_id = NULLIF($11, 0),
                 updated_at = NOW()
             WHERE id = $1
-            RETURNING id, name, category, description, rule_text, applies_to_project_id,
+            RETURNING id, name, category, description, rule_text, max_leave_days_per_request, applies_to_project_id,
                       effective_from, effective_to, status, created_by_member_id, created_at, updated_at;
             """,
             policy_rule_id,
@@ -1463,6 +1524,7 @@ async def update_policy_rule(
             category,
             description,
             rule_text,
+            max_leave_days_per_request,
             applies_to_project_id,
             effective_from,
             effective_to,
@@ -1648,6 +1710,12 @@ async def create_leave_request(
         days_requested = required_float(days_requested)
         project_id = int_filter(project_id)
         async with conn.transaction():
+            limit, policy = await get_leave_day_policy_limit(conn, leave_type, project_id, start_date)
+            if limit is not None and days_requested > limit:
+                return error(
+                    "Leave request violates active policy "
+                    f"'{policy['name']}': maximum {limit:g} days per request, requested {days_requested:g} days."
+                )
             request_row = await conn.fetchrow(
                 """
                 INSERT INTO public.leave_request
@@ -1723,10 +1791,11 @@ async def list_leave_requests(member_id: int | str = 0, status: str = "", projec
 
 
 @mcp.tool(output_schema=None)
-async def get_leave_request(leave_request_id: int) -> str:
+async def get_leave_request(leave_request_id: int | str) -> str:
     """Get a leave request and its ordered approval steps."""
     conn = await get_connection()
     try:
+        leave_request_id = required_int(leave_request_id)
         request_row = await conn.fetchrow(
             "SELECT * FROM public.v_leave_request_status WHERE leave_request_id = $1;",
             leave_request_id,
@@ -1760,14 +1829,16 @@ async def get_leave_request(leave_request_id: int) -> str:
 
 @mcp.tool(output_schema=None)
 async def add_leave_approval_step(
-    leave_request_id: int,
-    approval_order: int,
+    leave_request_id: int | str,
+    approval_order: int | str,
     approver_role: str = "",
     approver_member_id: int | str = 0,
 ) -> str:
     """Add an approval step to a leave request by role or member ID."""
     conn = await get_connection()
     try:
+        leave_request_id = required_int(leave_request_id)
+        approval_order = required_int(approval_order)
         approver_member_id = int_filter(approver_member_id)
         row = await conn.fetchrow(
             """
@@ -1792,15 +1863,41 @@ async def add_leave_approval_step(
 
 @mcp.tool(output_schema=None)
 async def review_leave_approval_step(
-    approval_id: int,
-    decision_by_member_id: int,
+    approval_id: int | str,
+    decision_by_member_id: int | str,
     status: str,
     comments: str = "",
 ) -> str:
     """Approve or reject one leave approval step."""
     conn = await get_connection()
     try:
+        approval_id = required_int(approval_id)
+        decision_by_member_id = required_int(decision_by_member_id)
         async with conn.transaction():
+            if status == "approved":
+                request_to_review = await conn.fetchrow(
+                    """
+                    SELECT lr.id, lr.project_id, lr.leave_type, lr.start_date, lr.days_requested
+                    FROM public.leave_approval la
+                    JOIN public.leave_request lr ON lr.id = la.leave_request_id
+                    WHERE la.id = $1;
+                    """,
+                    approval_id,
+                )
+                if not request_to_review:
+                    return error("Leave approval step not found")
+                limit, policy = await get_leave_day_policy_limit(
+                    conn,
+                    request_to_review["leave_type"],
+                    request_to_review["project_id"] or 0,
+                    request_to_review["start_date"].isoformat(),
+                )
+                if limit is not None and float(request_to_review["days_requested"]) > limit:
+                    return error(
+                        "Cannot approve leave request because it violates active policy "
+                        f"'{policy['name']}': maximum {limit:g} days per request, "
+                        f"requested {float(request_to_review['days_requested']):g} days."
+                    )
             row = await conn.fetchrow(
                 """
                 UPDATE public.leave_approval
