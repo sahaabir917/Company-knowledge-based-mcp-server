@@ -183,7 +183,7 @@ async def add_member(name: str, email: str, phone: str = "") -> dict[str, Any]:
 
 
 @mcp.tool()
-async def list_members() -> list[dict[str, Any]] | dict[str, str]:
+async def list_members() -> dict[str, Any]:
     conn = await get_connection()
     try:
         rows = await conn.fetch(
@@ -298,7 +298,7 @@ async def add_department(name: str, description: str = "") -> dict[str, Any]:
 
 
 @mcp.tool()
-async def list_departments() -> list[dict[str, Any]] | dict[str, str]:
+async def list_departments() -> dict[str, Any]:
     """List all departments."""
     conn = await get_connection()
     try:
@@ -387,21 +387,20 @@ async def delete_department(department_id: CoercedInt) -> dict[str, str]:
 
 @mcp.tool()
 async def add_team(
-    id: CoercedInt,
     name: str,
     department_id: CoercedInt,
     description: str = "",
 ) -> dict[str, Any]:
-    """Add a new team. id and department_id must be integers (department_id is a FK to department)."""
+    """Add a new team. department_id is a FK to department."""
     conn = await get_connection()
     try:
         row = await conn.fetchrow(
             """
-            INSERT INTO public.team (id, name, department_id, description)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO public.team (name, department_id, description)
+            VALUES ($1, $2, $3)
             RETURNING id, name, department_id, description, created_at;
             """,
-            id, name, department_id, description,
+            name, department_id, description,
         )
         return {"status": "success", "team": serialize_row(row)}
     except Exception as exc:
@@ -411,7 +410,7 @@ async def add_team(
 
 
 @mcp.tool()
-async def list_teams() -> list[dict[str, Any]] | dict[str, str]:
+async def list_teams() -> dict[str, Any]:
     """List all teams with their department name."""
     conn = await get_connection()
     try:
@@ -432,7 +431,7 @@ async def list_teams() -> list[dict[str, Any]] | dict[str, str]:
 
 
 @mcp.tool()
-async def list_teams_by_department(department_id: CoercedInt) -> list[dict[str, Any]] | dict[str, str]:
+async def list_teams_by_department(department_id: CoercedInt) -> dict[str, Any]:
     """List all teams in a specific department."""
     conn = await get_connection()
     try:
