@@ -117,6 +117,14 @@ def int_filter(value: int | str | None) -> int:
     return int(value)
 
 
+def required_int(value: int | str) -> int:
+    return int(value)
+
+
+def required_float(value: float | int | str) -> float:
+    return float(value)
+
+
 async def execute_status(sql: str, *args: Any) -> str:
     conn = await get_connection()
     try:
@@ -1623,10 +1631,10 @@ async def delete_employee_benefit(benefit_id: int) -> str:
 
 @mcp.tool(output_schema=None)
 async def create_leave_request(
-    member_id: int,
+    member_id: int | str,
     start_date: str,
     end_date: str,
-    days_requested: float,
+    days_requested: float | int | str,
     leave_type: str = "annual",
     reason: str = "",
     project_id: int | str = 0,
@@ -1636,13 +1644,15 @@ async def create_leave_request(
     """Create a leave request and optional ordered approval chain by role/member IDs."""
     conn = await get_connection()
     try:
+        member_id = required_int(member_id)
+        days_requested = required_float(days_requested)
         project_id = int_filter(project_id)
         async with conn.transaction():
             request_row = await conn.fetchrow(
                 """
                 INSERT INTO public.leave_request
                     (member_id, project_id, leave_type, start_date, end_date, days_requested, reason)
-                VALUES ($1, NULLIF($2, 0), $3, $4::date, $5::date, $6, $7)
+                VALUES ($1, NULLIF($2, 0), $3, $4::text::date, $5::text::date, $6, $7)
                 RETURNING id, member_id, project_id, leave_type, start_date, end_date,
                           days_requested, reason, status, requested_at, final_decision_at;
                 """,
