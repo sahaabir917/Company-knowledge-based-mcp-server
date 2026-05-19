@@ -36,6 +36,15 @@ class ConnectionErrorProxy:
     async def execute(self, *args: Any, **kwargs: Any) -> Any:
         raise self.exc
 
+    def transaction(self) -> "ConnectionErrorProxy":
+        return self
+
+    async def __aenter__(self) -> "ConnectionErrorProxy":
+        raise self.exc
+
+    async def __aexit__(self, *args: Any) -> None:
+        return None
+
     async def close(self) -> None:
         return None
 
@@ -98,6 +107,10 @@ def tags_from_csv(tags_csv: str) -> list[str]:
     return [tag.strip() for tag in tags_csv.split(",") if tag.strip()]
 
 
+def ints_from_csv(values_csv: str) -> list[int]:
+    return [int(value.strip()) for value in values_csv.split(",") if value.strip()]
+
+
 async def execute_status(sql: str, *args: Any) -> str:
     conn = await get_connection()
     try:
@@ -106,8 +119,40 @@ async def execute_status(sql: str, *args: Any) -> str:
         await conn.close()
 
 
+async def refresh_leave_request_status(conn: asyncpg.Connection, leave_request_id: int) -> asyncpg.Record | None:
+    return await conn.fetchrow(
+        """
+        WITH approval_summary AS (
+            SELECT
+                COUNT(*) AS total_steps,
+                COUNT(*) FILTER (WHERE status = 'pending') AS pending_steps,
+                COUNT(*) FILTER (WHERE status = 'rejected') AS rejected_steps
+            FROM public.leave_approval
+            WHERE leave_request_id = $1
+        )
+        UPDATE public.leave_request lr
+        SET status = CASE
+                WHEN approval_summary.total_steps = 0 THEN 'pending'
+                WHEN approval_summary.rejected_steps > 0 THEN 'rejected'
+                WHEN approval_summary.pending_steps > 0 THEN 'pending'
+                ELSE 'approved'
+            END,
+            final_decision_at = CASE
+                WHEN approval_summary.total_steps > 0
+                     AND (approval_summary.rejected_steps > 0 OR approval_summary.pending_steps = 0) THEN NOW()
+                ELSE NULL
+            END
+        FROM approval_summary
+        WHERE lr.id = $1
+        RETURNING lr.id, lr.member_id, lr.project_id, lr.leave_type, lr.start_date, lr.end_date,
+                  lr.days_requested, lr.reason, lr.status, lr.requested_at, lr.final_decision_at;
+        """,
+        leave_request_id,
+    )
+
+
 @mcp.tool(output_schema=None)
-async def test_connection() -> dict[str, Any]:
+async def test_connection() -> str:
     """Test the database connection."""
     conn = await get_connection()
     try:
@@ -120,7 +165,7 @@ async def test_connection() -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def create_company_schema() -> dict[str, Any]:
+async def create_company_schema() -> str:
     """Create all company knowledge base tables, indexes, views, and seed data from schema2.sql."""
     if not SCHEMA_PATH.exists():
         return error(f"Schema file not found: {SCHEMA_PATH}")
@@ -136,7 +181,7 @@ async def create_company_schema() -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def create_member_table() -> dict[str, Any]:
+async def create_member_table() -> str:
     """Backward-compatible helper that now creates the full schema."""
     return await create_company_schema()
 
@@ -147,7 +192,7 @@ async def create_member_table() -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def add_member(name: str, email: str, phone: str = "", role: str = "") -> dict[str, Any]:
+async def add_member(name: str, email: str, phone: str = "", role: str = "") -> str:
     """Add a new member."""
     conn = await get_connection()
     try:
@@ -170,7 +215,7 @@ async def add_member(name: str, email: str, phone: str = "", role: str = "") -> 
 
 
 @mcp.tool(output_schema=None)
-async def list_members() -> dict[str, Any]:
+async def list_members() -> str:
     """List all members."""
     conn = await get_connection()
     try:
@@ -189,7 +234,7 @@ async def list_members() -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def get_member_by_email(email: str) -> dict[str, Any]:
+async def get_member_by_email(email: str) -> str:
     """Get a member by email."""
     conn = await get_connection()
     try:
@@ -211,7 +256,7 @@ async def get_member_by_email(email: str) -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def update_member(email: str, name: str, phone: str = "", role: str = "") -> dict[str, Any]:
+async def update_member(email: str, name: str, phone: str = "", role: str = "") -> str:
     """Update a member by email."""
     conn = await get_connection()
     try:
@@ -237,7 +282,7 @@ async def update_member(email: str, name: str, phone: str = "", role: str = "") 
 
 
 @mcp.tool(output_schema=None)
-async def delete_member(email: str) -> dict[str, Any]:
+async def delete_member(email: str) -> str:
     """Delete a member by email."""
     try:
         result = await execute_status("DELETE FROM public.member WHERE email = $1;", email)
@@ -254,7 +299,7 @@ async def delete_member(email: str) -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def add_department(name: str, description: str = "") -> dict[str, Any]:
+async def add_department(name: str, description: str = "") -> str:
     """Add a new department."""
     conn = await get_connection()
     try:
@@ -275,7 +320,7 @@ async def add_department(name: str, description: str = "") -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def list_departments() -> dict[str, Any]:
+async def list_departments() -> str:
     """List all departments."""
     conn = await get_connection()
     try:
@@ -294,7 +339,7 @@ async def list_departments() -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def get_department(department_id: int) -> dict[str, Any]:
+async def get_department(department_id: int) -> str:
     """Get a department by ID."""
     conn = await get_connection()
     try:
@@ -316,7 +361,7 @@ async def get_department(department_id: int) -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def update_department(department_id: int, name: str, description: str = "") -> dict[str, Any]:
+async def update_department(department_id: int, name: str, description: str = "") -> str:
     """Update a department."""
     conn = await get_connection()
     try:
@@ -341,7 +386,7 @@ async def update_department(department_id: int, name: str, description: str = ""
 
 
 @mcp.tool(output_schema=None)
-async def delete_department(department_id: int) -> dict[str, Any]:
+async def delete_department(department_id: int) -> str:
     """Delete a department by ID."""
     try:
         result = await execute_status("DELETE FROM public.department WHERE id = $1;", department_id)
@@ -358,7 +403,7 @@ async def delete_department(department_id: int) -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def add_team(name: str, department_id: int, description: str = "") -> dict[str, Any]:
+async def add_team(name: str, department_id: int, description: str = "") -> str:
     """Add a team under a department."""
     conn = await get_connection()
     try:
@@ -380,7 +425,7 @@ async def add_team(name: str, department_id: int, description: str = "") -> dict
 
 
 @mcp.tool(output_schema=None)
-async def list_teams(department_id: int = 0) -> dict[str, Any]:
+async def list_teams(department_id: int = 0) -> str:
     """List teams. Pass department_id to filter, or 0 for all teams."""
     conn = await get_connection()
     try:
@@ -402,7 +447,7 @@ async def list_teams(department_id: int = 0) -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def get_team(team_id: int) -> dict[str, Any]:
+async def get_team(team_id: int) -> str:
     """Get a team by ID."""
     conn = await get_connection()
     try:
@@ -425,7 +470,7 @@ async def get_team(team_id: int) -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def update_team(team_id: int, name: str, department_id: int, description: str = "") -> dict[str, Any]:
+async def update_team(team_id: int, name: str, department_id: int, description: str = "") -> str:
     """Update a team."""
     conn = await get_connection()
     try:
@@ -451,7 +496,7 @@ async def update_team(team_id: int, name: str, department_id: int, description: 
 
 
 @mcp.tool(output_schema=None)
-async def delete_team(team_id: int) -> dict[str, Any]:
+async def delete_team(team_id: int) -> str:
     """Delete a team by ID."""
     try:
         result = await execute_status("DELETE FROM public.team WHERE id = $1;", team_id)
@@ -463,7 +508,7 @@ async def delete_team(team_id: int) -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def add_member_to_team(team_id: int, member_id: int) -> dict[str, Any]:
+async def add_member_to_team(team_id: int, member_id: int) -> str:
     """Add a member to a team."""
     conn = await get_connection()
     try:
@@ -485,7 +530,7 @@ async def add_member_to_team(team_id: int, member_id: int) -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def list_team_members(team_id: int = 0, member_id: int = 0) -> dict[str, Any]:
+async def list_team_members(team_id: int = 0, member_id: int = 0) -> str:
     """List team memberships. Pass team_id or member_id to filter, or 0 for all."""
     conn = await get_connection()
     try:
@@ -510,7 +555,7 @@ async def list_team_members(team_id: int = 0, member_id: int = 0) -> dict[str, A
 
 
 @mcp.tool(output_schema=None)
-async def remove_member_from_team(team_id: int, member_id: int) -> dict[str, Any]:
+async def remove_member_from_team(team_id: int, member_id: int) -> str:
     """Remove a member from a team."""
     try:
         result = await execute_status(
@@ -538,7 +583,7 @@ async def add_project(
     status: str = "active",
     start_date: str = "",
     end_date: str = "",
-) -> dict[str, Any]:
+) -> str:
     """Add a project. Date values should be YYYY-MM-DD or empty."""
     conn = await get_connection()
     try:
@@ -563,7 +608,7 @@ async def add_project(
 
 
 @mcp.tool(output_schema=None)
-async def list_projects(team_id: int = 0, status: str = "") -> dict[str, Any]:
+async def list_projects(team_id: int = 0, status: str = "") -> str:
     """List projects. Pass team_id or status to filter, or leave default for all."""
     conn = await get_connection()
     try:
@@ -588,7 +633,7 @@ async def list_projects(team_id: int = 0, status: str = "") -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def get_project(project_id: int) -> dict[str, Any]:
+async def get_project(project_id: int) -> str:
     """Get a project by ID."""
     conn = await get_connection()
     try:
@@ -620,7 +665,7 @@ async def update_project(
     status: str = "active",
     start_date: str = "",
     end_date: str = "",
-) -> dict[str, Any]:
+) -> str:
     """Update a project."""
     conn = await get_connection()
     try:
@@ -654,7 +699,7 @@ async def update_project(
 
 
 @mcp.tool(output_schema=None)
-async def delete_project(project_id: int) -> dict[str, Any]:
+async def delete_project(project_id: int) -> str:
     """Delete a project by ID."""
     try:
         result = await execute_status("DELETE FROM public.project WHERE id = $1;", project_id)
@@ -678,7 +723,7 @@ async def add_task(
     status: str = "todo",
     priority: str = "medium",
     due_date: str = "",
-) -> dict[str, Any]:
+) -> str:
     """Add a task. due_date should be YYYY-MM-DD or empty."""
     conn = await get_connection()
     try:
@@ -703,7 +748,7 @@ async def add_task(
 
 
 @mcp.tool(output_schema=None)
-async def list_tasks(project_id: int = 0, status: str = "", priority: str = "") -> dict[str, Any]:
+async def list_tasks(project_id: int = 0, status: str = "", priority: str = "") -> str:
     """List tasks. Pass project_id, status, or priority to filter."""
     conn = await get_connection()
     try:
@@ -730,7 +775,7 @@ async def list_tasks(project_id: int = 0, status: str = "", priority: str = "") 
 
 
 @mcp.tool(output_schema=None)
-async def get_task(task_id: int) -> dict[str, Any]:
+async def get_task(task_id: int) -> str:
     """Get a task by ID."""
     conn = await get_connection()
     try:
@@ -762,7 +807,7 @@ async def update_task(
     status: str = "todo",
     priority: str = "medium",
     due_date: str = "",
-) -> dict[str, Any]:
+) -> str:
     """Update a task."""
     conn = await get_connection()
     try:
@@ -796,7 +841,7 @@ async def update_task(
 
 
 @mcp.tool(output_schema=None)
-async def delete_task(task_id: int) -> dict[str, Any]:
+async def delete_task(task_id: int) -> str:
     """Delete a task by ID."""
     try:
         result = await execute_status("DELETE FROM public.task WHERE id = $1;", task_id)
@@ -808,7 +853,7 @@ async def delete_task(task_id: int) -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def assign_task(task_id: int, member_id: int) -> dict[str, Any]:
+async def assign_task(task_id: int, member_id: int) -> str:
     """Assign a task to a member."""
     conn = await get_connection()
     try:
@@ -830,7 +875,7 @@ async def assign_task(task_id: int, member_id: int) -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def list_task_assignees(task_id: int = 0, member_id: int = 0) -> dict[str, Any]:
+async def list_task_assignees(task_id: int = 0, member_id: int = 0) -> str:
     """List task assignments. Pass task_id or member_id to filter, or 0 for all."""
     conn = await get_connection()
     try:
@@ -856,7 +901,7 @@ async def list_task_assignees(task_id: int = 0, member_id: int = 0) -> dict[str,
 
 
 @mcp.tool(output_schema=None)
-async def unassign_task(task_id: int, member_id: int) -> dict[str, Any]:
+async def unassign_task(task_id: int, member_id: int) -> str:
     """Remove a task assignment."""
     try:
         result = await execute_status(
@@ -884,7 +929,7 @@ async def upsert_project_budget(
     approved_by: str = "",
     approved_at: str = "",
     notes: str = "",
-) -> dict[str, Any]:
+) -> str:
     """Create or update a project's budget. approved_at should be ISO timestamp or empty."""
     conn = await get_connection()
     try:
@@ -915,7 +960,7 @@ async def upsert_project_budget(
 
 
 @mcp.tool(output_schema=None)
-async def list_project_budgets(project_id: int = 0) -> dict[str, Any]:
+async def list_project_budgets(project_id: int = 0) -> str:
     """List project budgets. Pass project_id to filter, or 0 for all."""
     conn = await get_connection()
     try:
@@ -938,7 +983,7 @@ async def list_project_budgets(project_id: int = 0) -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def get_project_budget(project_id: int) -> dict[str, Any]:
+async def get_project_budget(project_id: int) -> str:
     """Get one project's budget."""
     conn = await get_connection()
     try:
@@ -962,7 +1007,7 @@ async def get_project_budget(project_id: int) -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def delete_project_budget(project_id: int) -> dict[str, Any]:
+async def delete_project_budget(project_id: int) -> str:
     """Delete a project's budget."""
     try:
         result = await execute_status("DELETE FROM public.project_budget WHERE project_id = $1;", project_id)
@@ -982,7 +1027,7 @@ async def add_project_expense(
     incurred_at: str = "",
     recorded_by_member_id: int = 0,
     notes: str = "",
-) -> dict[str, Any]:
+) -> str:
     """Add a project expense. incurred_at should be YYYY-MM-DD or empty for today."""
     conn = await get_connection()
     try:
@@ -1009,7 +1054,7 @@ async def add_project_expense(
 
 
 @mcp.tool(output_schema=None)
-async def list_project_expenses(project_id: int = 0, category: str = "") -> dict[str, Any]:
+async def list_project_expenses(project_id: int = 0, category: str = "") -> str:
     """List project expenses. Pass project_id or category to filter."""
     conn = await get_connection()
     try:
@@ -1036,7 +1081,7 @@ async def list_project_expenses(project_id: int = 0, category: str = "") -> dict
 
 
 @mcp.tool(output_schema=None)
-async def get_project_expense(expense_id: int) -> dict[str, Any]:
+async def get_project_expense(expense_id: int) -> str:
     """Get one project expense by ID."""
     conn = await get_connection()
     try:
@@ -1071,7 +1116,7 @@ async def update_project_expense(
     incurred_at: str = "",
     recorded_by_member_id: int = 0,
     notes: str = "",
-) -> dict[str, Any]:
+) -> str:
     """Update a project expense. incurred_at should be YYYY-MM-DD or empty for today."""
     conn = await get_connection()
     try:
@@ -1108,7 +1153,7 @@ async def update_project_expense(
 
 
 @mcp.tool(output_schema=None)
-async def delete_project_expense(expense_id: int) -> dict[str, Any]:
+async def delete_project_expense(expense_id: int) -> str:
     """Delete a project expense by ID."""
     try:
         result = await execute_status("DELETE FROM public.project_expense WHERE id = $1;", expense_id)
@@ -1126,7 +1171,7 @@ async def add_project_knowledge(
     content: str,
     tags_csv: str = "",
     author_member_id: int = 0,
-) -> dict[str, Any]:
+) -> str:
     """Add a project knowledge entry. tags_csv should be comma-separated."""
     conn = await get_connection()
     try:
@@ -1150,7 +1195,7 @@ async def add_project_knowledge(
 
 
 @mcp.tool(output_schema=None)
-async def list_project_knowledge(project_id: int = 0, tag: str = "") -> dict[str, Any]:
+async def list_project_knowledge(project_id: int = 0, tag: str = "") -> str:
     """List project knowledge entries. Pass project_id or tag to filter."""
     conn = await get_connection()
     try:
@@ -1176,7 +1221,7 @@ async def list_project_knowledge(project_id: int = 0, tag: str = "") -> dict[str
 
 
 @mcp.tool(output_schema=None)
-async def get_project_knowledge(knowledge_id: int) -> dict[str, Any]:
+async def get_project_knowledge(knowledge_id: int) -> str:
     """Get one project knowledge entry by ID."""
     conn = await get_connection()
     try:
@@ -1207,7 +1252,7 @@ async def update_project_knowledge(
     content: str,
     tags_csv: str = "",
     author_member_id: int = 0,
-) -> dict[str, Any]:
+) -> str:
     """Update a project knowledge entry."""
     conn = await get_connection()
     try:
@@ -1238,7 +1283,7 @@ async def update_project_knowledge(
 
 
 @mcp.tool(output_schema=None)
-async def delete_project_knowledge(knowledge_id: int) -> dict[str, Any]:
+async def delete_project_knowledge(knowledge_id: int) -> str:
     """Delete a project knowledge entry by ID."""
     try:
         result = await execute_status("DELETE FROM public.project_knowledge WHERE id = $1;", knowledge_id)
@@ -1250,12 +1295,551 @@ async def delete_project_knowledge(knowledge_id: int) -> dict[str, Any]:
 
 
 # =============================================================================
+# POLICY, BENEFIT, AND LEAVE TOOLS
+# =============================================================================
+
+
+@mcp.tool(output_schema=None)
+async def add_policy_rule(
+    name: str,
+    rule_text: str,
+    category: str = "",
+    description: str = "",
+    applies_to_project_id: int = 0,
+    effective_from: str = "",
+    effective_to: str = "",
+    status: str = "active",
+    created_by_member_id: int = 0,
+) -> str:
+    """Create a policy rule such as project revenue, delivery, hiring, or leave."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO public.policy_rule
+                (name, category, description, rule_text, applies_to_project_id,
+                 effective_from, effective_to, status, created_by_member_id)
+            VALUES ($1, $2, $3, $4, NULLIF($5, 0), NULLIF($6, '')::date,
+                    NULLIF($7, '')::date, $8, NULLIF($9, 0))
+            RETURNING id, name, category, description, rule_text, applies_to_project_id,
+                      effective_from, effective_to, status, created_by_member_id, created_at, updated_at;
+            """,
+            name,
+            category,
+            description,
+            rule_text,
+            applies_to_project_id,
+            effective_from,
+            effective_to,
+            status,
+            created_by_member_id,
+        )
+        return ok(policy_rule=serialize_row(row))
+    except Exception as exc:
+        return error(str(exc))
+    finally:
+        await conn.close()
+
+
+@mcp.tool(output_schema=None)
+async def list_policy_rules(category: str = "", status: str = "", project_id: int = 0) -> str:
+    """List policy rules. Filter by category, status, or project_id."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT pr.id, pr.name, pr.category, pr.description, pr.rule_text,
+                   pr.applies_to_project_id, p.name AS applies_to_project_name,
+                   pr.effective_from, pr.effective_to, pr.status,
+                   pr.created_by_member_id, m.name AS created_by_member_name,
+                   pr.created_at, pr.updated_at
+            FROM public.policy_rule pr
+            LEFT JOIN public.project p ON p.id = pr.applies_to_project_id
+            LEFT JOIN public.member m ON m.id = pr.created_by_member_id
+            WHERE ($1::text = '' OR pr.category = $1)
+              AND ($2::text = '' OR pr.status = $2)
+              AND ($3::int = 0 OR pr.applies_to_project_id = $3)
+            ORDER BY pr.category, pr.name;
+            """,
+            category,
+            status,
+            project_id,
+        )
+        return rows_payload("policy_rules", rows)
+    except Exception as exc:
+        return error(str(exc))
+    finally:
+        await conn.close()
+
+
+@mcp.tool(output_schema=None)
+async def get_policy_rule(policy_rule_id: int) -> str:
+    """Get one policy rule by ID."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT pr.id, pr.name, pr.category, pr.description, pr.rule_text,
+                   pr.applies_to_project_id, p.name AS applies_to_project_name,
+                   pr.effective_from, pr.effective_to, pr.status,
+                   pr.created_by_member_id, m.name AS created_by_member_name,
+                   pr.created_at, pr.updated_at
+            FROM public.policy_rule pr
+            LEFT JOIN public.project p ON p.id = pr.applies_to_project_id
+            LEFT JOIN public.member m ON m.id = pr.created_by_member_id
+            WHERE pr.id = $1;
+            """,
+            policy_rule_id,
+        )
+        if not row:
+            return error("Policy rule not found")
+        return ok(policy_rule=serialize_row(row))
+    except Exception as exc:
+        return error(str(exc))
+    finally:
+        await conn.close()
+
+
+@mcp.tool(output_schema=None)
+async def update_policy_rule(
+    policy_rule_id: int,
+    name: str,
+    rule_text: str,
+    category: str = "",
+    description: str = "",
+    applies_to_project_id: int = 0,
+    effective_from: str = "",
+    effective_to: str = "",
+    status: str = "active",
+    created_by_member_id: int = 0,
+) -> str:
+    """Update a policy rule."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            UPDATE public.policy_rule
+            SET name = $2,
+                category = $3,
+                description = $4,
+                rule_text = $5,
+                applies_to_project_id = NULLIF($6, 0),
+                effective_from = NULLIF($7, '')::date,
+                effective_to = NULLIF($8, '')::date,
+                status = $9,
+                created_by_member_id = NULLIF($10, 0),
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, name, category, description, rule_text, applies_to_project_id,
+                      effective_from, effective_to, status, created_by_member_id, created_at, updated_at;
+            """,
+            policy_rule_id,
+            name,
+            category,
+            description,
+            rule_text,
+            applies_to_project_id,
+            effective_from,
+            effective_to,
+            status,
+            created_by_member_id,
+        )
+        if not row:
+            return error("Policy rule not found")
+        return ok(policy_rule=serialize_row(row))
+    except Exception as exc:
+        return error(str(exc))
+    finally:
+        await conn.close()
+
+
+@mcp.tool(output_schema=None)
+async def delete_policy_rule(policy_rule_id: int) -> str:
+    """Delete a policy rule by ID."""
+    try:
+        result = await execute_status("DELETE FROM public.policy_rule WHERE id = $1;", policy_rule_id)
+        if int(result.split()[-1]) == 0:
+            return error("Policy rule not found")
+        return ok(message=f"Policy rule {policy_rule_id} deleted successfully")
+    except Exception as exc:
+        return error(str(exc))
+
+
+@mcp.tool(output_schema=None)
+async def add_employee_benefit(
+    member_id: int,
+    benefit_type: str,
+    title: str,
+    amount: float = 0,
+    currency: str = "USD",
+    balance_days: float = 0,
+    effective_from: str = "",
+    effective_to: str = "",
+    status: str = "active",
+    notes: str = "",
+) -> str:
+    """Add salary, leave balance, or another employee benefit."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO public.employee_benefit
+                (member_id, benefit_type, title, amount, currency, balance_days,
+                 effective_from, effective_to, status, notes)
+            VALUES ($1, $2, $3, NULLIF($4, 0), $5, NULLIF($6, 0),
+                    NULLIF($7, '')::date, NULLIF($8, '')::date, $9, $10)
+            RETURNING id, member_id, benefit_type, title, amount, currency, balance_days,
+                      effective_from, effective_to, status, notes, created_at, updated_at;
+            """,
+            member_id,
+            benefit_type,
+            title,
+            amount,
+            currency,
+            balance_days,
+            effective_from,
+            effective_to,
+            status,
+            notes,
+        )
+        return ok(employee_benefit=serialize_row(row))
+    except Exception as exc:
+        return error(str(exc))
+    finally:
+        await conn.close()
+
+
+@mcp.tool(output_schema=None)
+async def list_employee_benefits(member_id: int = 0, benefit_type: str = "", status: str = "") -> str:
+    """List employee benefits. Filter by member_id, benefit_type, or status."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT eb.id, eb.member_id, m.name AS member_name, m.email, m.role,
+                   eb.benefit_type, eb.title, eb.amount, eb.currency, eb.balance_days,
+                   eb.effective_from, eb.effective_to, eb.status, eb.notes,
+                   eb.created_at, eb.updated_at
+            FROM public.employee_benefit eb
+            JOIN public.member m ON m.id = eb.member_id
+            WHERE ($1::int = 0 OR eb.member_id = $1)
+              AND ($2::text = '' OR eb.benefit_type = $2)
+              AND ($3::text = '' OR eb.status = $3)
+            ORDER BY m.name, eb.benefit_type, eb.effective_from DESC NULLS LAST;
+            """,
+            member_id,
+            benefit_type,
+            status,
+        )
+        return rows_payload("employee_benefits", rows)
+    except Exception as exc:
+        return error(str(exc))
+    finally:
+        await conn.close()
+
+
+@mcp.tool(output_schema=None)
+async def update_employee_benefit(
+    benefit_id: int,
+    benefit_type: str,
+    title: str,
+    amount: float = 0,
+    currency: str = "USD",
+    balance_days: float = 0,
+    effective_from: str = "",
+    effective_to: str = "",
+    status: str = "active",
+    notes: str = "",
+) -> str:
+    """Update an employee benefit."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            UPDATE public.employee_benefit
+            SET benefit_type = $2,
+                title = $3,
+                amount = NULLIF($4, 0),
+                currency = $5,
+                balance_days = NULLIF($6, 0),
+                effective_from = NULLIF($7, '')::date,
+                effective_to = NULLIF($8, '')::date,
+                status = $9,
+                notes = $10,
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, member_id, benefit_type, title, amount, currency, balance_days,
+                      effective_from, effective_to, status, notes, created_at, updated_at;
+            """,
+            benefit_id,
+            benefit_type,
+            title,
+            amount,
+            currency,
+            balance_days,
+            effective_from,
+            effective_to,
+            status,
+            notes,
+        )
+        if not row:
+            return error("Employee benefit not found")
+        return ok(employee_benefit=serialize_row(row))
+    except Exception as exc:
+        return error(str(exc))
+    finally:
+        await conn.close()
+
+
+@mcp.tool(output_schema=None)
+async def delete_employee_benefit(benefit_id: int) -> str:
+    """Delete an employee benefit by ID."""
+    try:
+        result = await execute_status("DELETE FROM public.employee_benefit WHERE id = $1;", benefit_id)
+        if int(result.split()[-1]) == 0:
+            return error("Employee benefit not found")
+        return ok(message=f"Employee benefit {benefit_id} deleted successfully")
+    except Exception as exc:
+        return error(str(exc))
+
+
+@mcp.tool(output_schema=None)
+async def create_leave_request(
+    member_id: int,
+    start_date: str,
+    end_date: str,
+    days_requested: float,
+    leave_type: str = "annual",
+    reason: str = "",
+    project_id: int = 0,
+    approver_roles_csv: str = "",
+    approver_member_ids_csv: str = "",
+) -> str:
+    """Create a leave request and optional ordered approval chain by role/member IDs."""
+    conn = await get_connection()
+    try:
+        async with conn.transaction():
+            request_row = await conn.fetchrow(
+                """
+                INSERT INTO public.leave_request
+                    (member_id, project_id, leave_type, start_date, end_date, days_requested, reason)
+                VALUES ($1, NULLIF($2, 0), $3, $4::date, $5::date, $6, $7)
+                RETURNING id, member_id, project_id, leave_type, start_date, end_date,
+                          days_requested, reason, status, requested_at, final_decision_at;
+                """,
+                member_id,
+                project_id,
+                leave_type,
+                start_date,
+                end_date,
+                days_requested,
+                reason,
+            )
+            approval_order = 1
+            for role in tags_from_csv(approver_roles_csv):
+                await conn.execute(
+                    """
+                    INSERT INTO public.leave_approval (leave_request_id, approval_order, approver_role)
+                    VALUES ($1, $2, $3);
+                    """,
+                    request_row["id"],
+                    approval_order,
+                    role,
+                )
+                approval_order += 1
+            for approver_member_id in ints_from_csv(approver_member_ids_csv):
+                await conn.execute(
+                    """
+                    INSERT INTO public.leave_approval (leave_request_id, approval_order, approver_member_id)
+                    VALUES ($1, $2, $3);
+                    """,
+                    request_row["id"],
+                    approval_order,
+                    approver_member_id,
+                )
+                approval_order += 1
+            request_row = await refresh_leave_request_status(conn, request_row["id"])
+        return ok(leave_request=serialize_row(request_row))
+    except Exception as exc:
+        return error(str(exc))
+    finally:
+        await conn.close()
+
+
+@mcp.tool(output_schema=None)
+async def list_leave_requests(member_id: int = 0, status: str = "", project_id: int = 0) -> str:
+    """List leave requests with approval summary."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT *
+            FROM public.v_leave_request_status
+            WHERE ($1::int = 0 OR member_id = $1)
+              AND ($2::text = '' OR status = $2)
+              AND ($3::int = 0 OR project_id = $3)
+            ORDER BY requested_at DESC, leave_request_id DESC;
+            """,
+            member_id,
+            status,
+            project_id,
+        )
+        return rows_payload("leave_requests", rows)
+    except Exception as exc:
+        return error(str(exc))
+    finally:
+        await conn.close()
+
+
+@mcp.tool(output_schema=None)
+async def get_leave_request(leave_request_id: int) -> str:
+    """Get a leave request and its ordered approval steps."""
+    conn = await get_connection()
+    try:
+        request_row = await conn.fetchrow(
+            "SELECT * FROM public.v_leave_request_status WHERE leave_request_id = $1;",
+            leave_request_id,
+        )
+        if not request_row:
+            return error("Leave request not found")
+        approval_rows = await conn.fetch(
+            """
+            SELECT la.id, la.leave_request_id, la.approval_order, la.approver_role,
+                   la.approver_member_id, approver.name AS approver_member_name,
+                   approver.email AS approver_member_email, approver.role AS approver_member_role,
+                   la.status, la.decision_by_member_id, decision_by.name AS decision_by_member_name,
+                   la.decision_at, la.comments, la.created_at
+            FROM public.leave_approval la
+            LEFT JOIN public.member approver ON approver.id = la.approver_member_id
+            LEFT JOIN public.member decision_by ON decision_by.id = la.decision_by_member_id
+            WHERE la.leave_request_id = $1
+            ORDER BY la.approval_order;
+            """,
+            leave_request_id,
+        )
+        return ok(
+            leave_request=serialize_row(request_row),
+            approvals=[serialize_row(row) for row in approval_rows],
+        )
+    except Exception as exc:
+        return error(str(exc))
+    finally:
+        await conn.close()
+
+
+@mcp.tool(output_schema=None)
+async def add_leave_approval_step(
+    leave_request_id: int,
+    approval_order: int,
+    approver_role: str = "",
+    approver_member_id: int = 0,
+) -> str:
+    """Add an approval step to a leave request by role or member ID."""
+    conn = await get_connection()
+    try:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO public.leave_approval
+                (leave_request_id, approval_order, approver_role, approver_member_id)
+            VALUES ($1, $2, $3, NULLIF($4, 0))
+            RETURNING id, leave_request_id, approval_order, approver_role, approver_member_id,
+                      status, decision_by_member_id, decision_at, comments, created_at;
+            """,
+            leave_request_id,
+            approval_order,
+            approver_role,
+            approver_member_id,
+        )
+        request_row = await refresh_leave_request_status(conn, leave_request_id)
+        return ok(leave_approval=serialize_row(row), leave_request=serialize_row(request_row))
+    except Exception as exc:
+        return error(str(exc))
+    finally:
+        await conn.close()
+
+
+@mcp.tool(output_schema=None)
+async def review_leave_approval_step(
+    approval_id: int,
+    decision_by_member_id: int,
+    status: str,
+    comments: str = "",
+) -> str:
+    """Approve or reject one leave approval step."""
+    conn = await get_connection()
+    try:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                UPDATE public.leave_approval
+                SET status = $2,
+                    decision_by_member_id = $3,
+                    decision_at = NOW(),
+                    comments = $4
+                WHERE id = $1
+                RETURNING id, leave_request_id, approval_order, approver_role, approver_member_id,
+                          status, decision_by_member_id, decision_at, comments, created_at;
+                """,
+                approval_id,
+                status,
+                decision_by_member_id,
+                comments,
+            )
+            if not row:
+                return error("Leave approval step not found")
+            request_row = await refresh_leave_request_status(conn, row["leave_request_id"])
+        return ok(leave_approval=serialize_row(row), leave_request=serialize_row(request_row))
+    except Exception as exc:
+        return error(str(exc))
+    finally:
+        await conn.close()
+
+
+@mcp.tool(output_schema=None)
+async def list_leave_approvals(
+    leave_request_id: int = 0,
+    approver_role: str = "",
+    approver_member_id: int = 0,
+    status: str = "",
+) -> str:
+    """List leave approval steps."""
+    conn = await get_connection()
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT la.id, la.leave_request_id, la.approval_order, la.approver_role,
+                   la.approver_member_id, approver.name AS approver_member_name,
+                   approver.email AS approver_member_email, approver.role AS approver_member_role,
+                   la.status, la.decision_by_member_id, decision_by.name AS decision_by_member_name,
+                   la.decision_at, la.comments, la.created_at
+            FROM public.leave_approval la
+            LEFT JOIN public.member approver ON approver.id = la.approver_member_id
+            LEFT JOIN public.member decision_by ON decision_by.id = la.decision_by_member_id
+            WHERE ($1::int = 0 OR la.leave_request_id = $1)
+              AND ($2::text = '' OR la.approver_role = $2)
+              AND ($3::int = 0 OR la.approver_member_id = $3)
+              AND ($4::text = '' OR la.status = $4)
+            ORDER BY la.leave_request_id DESC, la.approval_order;
+            """,
+            leave_request_id,
+            approver_role,
+            approver_member_id,
+            status,
+        )
+        return rows_payload("leave_approvals", rows)
+    except Exception as exc:
+        return error(str(exc))
+    finally:
+        await conn.close()
+
+
+# =============================================================================
 # VIEW TOOLS
 # =============================================================================
 
 
 @mcp.tool(output_schema=None)
-async def list_project_budget_summary() -> dict[str, Any]:
+async def list_project_budget_summary() -> str:
     """List budget versus actual spend per project."""
     conn = await get_connection()
     try:
@@ -1268,7 +1852,7 @@ async def list_project_budget_summary() -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def list_member_teams() -> dict[str, Any]:
+async def list_member_teams() -> str:
     """List all teams that each member belongs to."""
     conn = await get_connection()
     try:
@@ -1281,7 +1865,7 @@ async def list_member_teams() -> dict[str, Any]:
 
 
 @mcp.tool(output_schema=None)
-async def list_task_workload() -> dict[str, Any]:
+async def list_task_workload() -> str:
     """List open-task workload per member."""
     conn = await get_connection()
     try:

@@ -110,6 +110,73 @@ CREATE TABLE IF NOT EXISTS public.project_knowledge (
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS public.policy_rule (
+    id                   SERIAL PRIMARY KEY,
+    name                 TEXT        NOT NULL UNIQUE,
+    category             TEXT        NOT NULL DEFAULT '',
+    description          TEXT        NOT NULL DEFAULT '',
+    rule_text            TEXT        NOT NULL,
+    applies_to_project_id INT        REFERENCES public.project(id) ON DELETE CASCADE,
+    effective_from       DATE,
+    effective_to         DATE,
+    status               TEXT        NOT NULL DEFAULT 'active'
+                                CHECK (status IN ('draft', 'active', 'archived')),
+    created_by_member_id INT         REFERENCES public.member(id) ON DELETE SET NULL,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.employee_benefit (
+    id            SERIAL PRIMARY KEY,
+    member_id     INT            NOT NULL REFERENCES public.member(id) ON DELETE CASCADE,
+    benefit_type  TEXT           NOT NULL
+                                  CHECK (benefit_type IN ('salary', 'leave', 'health', 'bonus', 'allowance', 'other')),
+    title         TEXT           NOT NULL,
+    amount        NUMERIC(14, 2),
+    currency      TEXT           NOT NULL DEFAULT 'USD',
+    balance_days  NUMERIC(8, 2),
+    effective_from DATE,
+    effective_to   DATE,
+    status        TEXT           NOT NULL DEFAULT 'active'
+                                  CHECK (status IN ('active', 'inactive', 'expired')),
+    notes         TEXT           NOT NULL DEFAULT '',
+    created_at    TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    UNIQUE (member_id, benefit_type, title, effective_from)
+);
+
+CREATE TABLE IF NOT EXISTS public.leave_request (
+    id                  SERIAL PRIMARY KEY,
+    member_id           INT         NOT NULL REFERENCES public.member(id) ON DELETE CASCADE,
+    project_id          INT         REFERENCES public.project(id) ON DELETE SET NULL,
+    leave_type          TEXT        NOT NULL DEFAULT 'annual',
+    start_date          DATE        NOT NULL,
+    end_date            DATE        NOT NULL,
+    days_requested      NUMERIC(8, 2) NOT NULL,
+    reason              TEXT        NOT NULL DEFAULT '',
+    status              TEXT        NOT NULL DEFAULT 'pending'
+                                  CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
+    requested_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    final_decision_at   TIMESTAMPTZ,
+    CHECK (end_date >= start_date)
+);
+
+CREATE TABLE IF NOT EXISTS public.leave_approval (
+    id                     SERIAL PRIMARY KEY,
+    leave_request_id       INT         NOT NULL REFERENCES public.leave_request(id) ON DELETE CASCADE,
+    approval_order         INT         NOT NULL,
+    approver_role          TEXT        NOT NULL DEFAULT '',
+    approver_member_id     INT         REFERENCES public.member(id) ON DELETE SET NULL,
+    status                 TEXT        NOT NULL DEFAULT 'pending'
+                                     CHECK (status IN ('pending', 'approved', 'rejected', 'skipped')),
+    decision_by_member_id  INT         REFERENCES public.member(id) ON DELETE SET NULL,
+    decision_at            TIMESTAMPTZ,
+    comments               TEXT        NOT NULL DEFAULT '',
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (leave_request_id, approval_order),
+    CHECK (approver_role <> '' OR approver_member_id IS NOT NULL)
+);
+
 
 -- -----------------------------------------------------------------------------
 -- 2. INDEXES
@@ -127,6 +194,14 @@ CREATE INDEX IF NOT EXISTS idx_expense_project        ON public.project_expense(
 CREATE INDEX IF NOT EXISTS idx_expense_incurred_at    ON public.project_expense(incurred_at);
 CREATE INDEX IF NOT EXISTS idx_knowledge_project      ON public.project_knowledge(project_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_tags         ON public.project_knowledge USING GIN (tags);
+CREATE INDEX IF NOT EXISTS idx_policy_category        ON public.policy_rule(category);
+CREATE INDEX IF NOT EXISTS idx_policy_status          ON public.policy_rule(status);
+CREATE INDEX IF NOT EXISTS idx_benefit_member         ON public.employee_benefit(member_id);
+CREATE INDEX IF NOT EXISTS idx_benefit_type           ON public.employee_benefit(benefit_type);
+CREATE INDEX IF NOT EXISTS idx_leave_member           ON public.leave_request(member_id);
+CREATE INDEX IF NOT EXISTS idx_leave_status           ON public.leave_request(status);
+CREATE INDEX IF NOT EXISTS idx_leave_approval_request ON public.leave_approval(leave_request_id, approval_order);
+CREATE INDEX IF NOT EXISTS idx_leave_approval_role    ON public.leave_approval(approver_role);
 
 
 -- -----------------------------------------------------------------------------
@@ -186,6 +261,32 @@ LEFT JOIN public.task_assignee ta ON ta.member_id = m.id
 LEFT JOIN public.task          tk ON tk.id = ta.task_id
 GROUP BY  m.id, m.name, m.role
 ORDER BY  total_open DESC, m.name;
+
+CREATE OR REPLACE VIEW public.v_leave_request_status AS
+SELECT
+    lr.id AS leave_request_id,
+    lr.member_id,
+    m.name AS member_name,
+    m.email AS member_email,
+    m.role AS member_role,
+    lr.project_id,
+    p.name AS project_name,
+    lr.leave_type,
+    lr.start_date,
+    lr.end_date,
+    lr.days_requested,
+    lr.status,
+    COUNT(la.id) AS approval_steps,
+    COUNT(la.id) FILTER (WHERE la.status = 'approved') AS approved_steps,
+    COUNT(la.id) FILTER (WHERE la.status = 'rejected') AS rejected_steps,
+    MIN(la.approval_order) FILTER (WHERE la.status = 'pending') AS next_approval_order,
+    lr.requested_at,
+    lr.final_decision_at
+FROM public.leave_request lr
+JOIN public.member m ON m.id = lr.member_id
+LEFT JOIN public.project p ON p.id = lr.project_id
+LEFT JOIN public.leave_approval la ON la.leave_request_id = lr.id
+GROUP BY lr.id, m.id, m.name, m.email, m.role, p.id, p.name;
 
 
 -- -----------------------------------------------------------------------------
@@ -440,6 +541,44 @@ AND NOT EXISTS (
     WHERE pk.project_id = p.id AND pk.title = 'Q2 Keyword Strategy'
 );
 
+INSERT INTO public.policy_rule (name, category, description, rule_text, status, created_by_member_id)
+VALUES
+    ('Project Revenue Recognition', 'project_revenue', 'How project revenue is recognized and reviewed', 'Revenue must be tied to signed project milestones and reviewed by Finance before monthly close.', 'active', (SELECT id FROM public.member WHERE email = 'eva@company.com')),
+    ('Delivery Acceptance Policy', 'delivery', 'Delivery sign-off expectations', 'A delivery is accepted only after project lead review, client/stakeholder confirmation, and task closure evidence.', 'active', (SELECT id FROM public.member WHERE email = 'eva@company.com')),
+    ('New Hiring Approval Policy', 'hiring', 'Hiring approval chain', 'New hires require role justification, HR screening, department lead approval, and CEO/CTO approval before offer release.', 'active', (SELECT id FROM public.member WHERE email = 'farhan@company.com')),
+    ('Leave Approval Policy', 'leave', 'Default employee leave approval chain', 'Leave requests require approval from project lead or manager, then HR, then executive approval for long leave or critical coverage periods.', 'active', (SELECT id FROM public.member WHERE email = 'farhan@company.com'))
+ON CONFLICT (name) DO UPDATE
+SET category = EXCLUDED.category,
+    description = EXCLUDED.description,
+    rule_text = EXCLUDED.rule_text,
+    status = EXCLUDED.status,
+    created_by_member_id = EXCLUDED.created_by_member_id,
+    updated_at = NOW();
+
+INSERT INTO public.employee_benefit (member_id, benefit_type, title, amount, currency, balance_days, effective_from, status, notes)
+SELECT m.id, 'salary', 'Base Salary', 6500.00, 'USD', NULL, '2026-01-01', 'active', 'Monthly base salary'
+FROM public.member m WHERE m.email = 'alice@company.com'
+ON CONFLICT (member_id, benefit_type, title, effective_from) DO UPDATE
+SET amount = EXCLUDED.amount, currency = EXCLUDED.currency, status = EXCLUDED.status, notes = EXCLUDED.notes, updated_at = NOW();
+
+INSERT INTO public.employee_benefit (member_id, benefit_type, title, amount, currency, balance_days, effective_from, status, notes)
+SELECT m.id, 'leave', 'Annual Leave Balance', NULL, 'USD', 20.00, '2026-01-01', 'active', 'Annual paid leave allocation'
+FROM public.member m WHERE m.email = 'alice@company.com'
+ON CONFLICT (member_id, benefit_type, title, effective_from) DO UPDATE
+SET balance_days = EXCLUDED.balance_days, status = EXCLUDED.status, notes = EXCLUDED.notes, updated_at = NOW();
+
+INSERT INTO public.employee_benefit (member_id, benefit_type, title, amount, currency, balance_days, effective_from, status, notes)
+SELECT m.id, 'salary', 'Base Salary', 7200.00, 'USD', NULL, '2026-01-01', 'active', 'Monthly base salary'
+FROM public.member m WHERE m.email = 'eva@company.com'
+ON CONFLICT (member_id, benefit_type, title, effective_from) DO UPDATE
+SET amount = EXCLUDED.amount, currency = EXCLUDED.currency, status = EXCLUDED.status, notes = EXCLUDED.notes, updated_at = NOW();
+
+INSERT INTO public.employee_benefit (member_id, benefit_type, title, amount, currency, balance_days, effective_from, status, notes)
+SELECT m.id, 'leave', 'Annual Leave Balance', NULL, 'USD', 24.00, '2026-01-01', 'active', 'Annual paid leave allocation'
+FROM public.member m WHERE m.email = 'eva@company.com'
+ON CONFLICT (member_id, benefit_type, title, effective_from) DO UPDATE
+SET balance_days = EXCLUDED.balance_days, status = EXCLUDED.status, notes = EXCLUDED.notes, updated_at = NOW();
+
 
 -- -----------------------------------------------------------------------------
 -- 5. QUICK VERIFICATION QUERIES
@@ -448,3 +587,4 @@ AND NOT EXISTS (
 -- SELECT * FROM public.v_project_budget_summary;
 -- SELECT * FROM public.v_member_teams;
 -- SELECT * FROM public.v_task_workload;
+-- SELECT * FROM public.v_leave_request_status;

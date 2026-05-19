@@ -1,7 +1,7 @@
 -- =============================================================================
--- Company Knowledge Base — Full Schema
+-- Company Knowledge Base - Full Schema
 -- Run this entire file in Neon SQL Editor to set up the database.
--- Safe to re-run: all objects use IF NOT EXISTS / OR REPLACE.
+-- Safe to re-run: all objects use IF NOT EXISTS / OR REPLACE / ON CONFLICT.
 -- =============================================================================
 
 
@@ -30,11 +30,13 @@ CREATE TABLE IF NOT EXISTS public.member (
     name       TEXT NOT NULL,
     email      TEXT NOT NULL UNIQUE,
     phone      TEXT NOT NULL DEFAULT '',
-    role       TEXT NOT NULL DEFAULT '',   -- job title e.g. "Backend Engineer"
+    role       TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Junction: member ↔ team  (a member can belong to many teams)
+ALTER TABLE public.member
+    ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT '';
+
 CREATE TABLE IF NOT EXISTS public.team_member (
     team_id   INT NOT NULL REFERENCES public.team(id)   ON DELETE CASCADE,
     member_id INT NOT NULL REFERENCES public.member(id) ON DELETE CASCADE,
@@ -67,7 +69,6 @@ CREATE TABLE IF NOT EXISTS public.task (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Junction: task ↔ member  (a task can be assigned to many members)
 CREATE TABLE IF NOT EXISTS public.task_assignee (
     task_id     INT NOT NULL REFERENCES public.task(id)   ON DELETE CASCADE,
     member_id   INT NOT NULL REFERENCES public.member(id) ON DELETE CASCADE,
@@ -75,42 +76,105 @@ CREATE TABLE IF NOT EXISTS public.task_assignee (
     PRIMARY KEY (task_id, member_id)
 );
 
--- One budget per project (1:1)
 CREATE TABLE IF NOT EXISTS public.project_budget (
     id           SERIAL PRIMARY KEY,
     project_id   INT            NOT NULL UNIQUE REFERENCES public.project(id) ON DELETE CASCADE,
     total_amount NUMERIC(14, 2) NOT NULL DEFAULT 0,
     currency     TEXT           NOT NULL DEFAULT 'USD',
-    approved_by  TEXT           NOT NULL DEFAULT '',   -- name or email of approver
+    approved_by  TEXT           NOT NULL DEFAULT '',
     approved_at  TIMESTAMPTZ,
     notes        TEXT           NOT NULL DEFAULT '',
     created_at   TIMESTAMPTZ    NOT NULL DEFAULT NOW()
 );
 
--- Many expenses per project
 CREATE TABLE IF NOT EXISTS public.project_expense (
-    id                   SERIAL PRIMARY KEY,
-    project_id           INT            NOT NULL REFERENCES public.project(id) ON DELETE CASCADE,
-    title                TEXT           NOT NULL,
-    amount               NUMERIC(14, 2) NOT NULL,
-    category             TEXT           NOT NULL DEFAULT '',
-        -- e.g. 'software', 'hardware', 'travel', 'personnel', 'other'
-    incurred_at          DATE           NOT NULL DEFAULT CURRENT_DATE,
-    recorded_by_member_id INT           REFERENCES public.member(id) ON DELETE SET NULL,
-    notes                TEXT           NOT NULL DEFAULT '',
-    created_at           TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+    id                    SERIAL PRIMARY KEY,
+    project_id            INT            NOT NULL REFERENCES public.project(id) ON DELETE CASCADE,
+    title                 TEXT           NOT NULL,
+    amount                NUMERIC(14, 2) NOT NULL,
+    category              TEXT           NOT NULL DEFAULT '',
+    incurred_at           DATE           NOT NULL DEFAULT CURRENT_DATE,
+    recorded_by_member_id INT            REFERENCES public.member(id) ON DELETE SET NULL,
+    notes                 TEXT           NOT NULL DEFAULT '',
+    created_at            TIMESTAMPTZ    NOT NULL DEFAULT NOW()
 );
 
--- Knowledge base entries per project
 CREATE TABLE IF NOT EXISTS public.project_knowledge (
     id               SERIAL PRIMARY KEY,
     project_id       INT         NOT NULL REFERENCES public.project(id) ON DELETE CASCADE,
     title            TEXT        NOT NULL,
-    content          TEXT        NOT NULL,   -- markdown or freeform text
+    content          TEXT        NOT NULL,
     tags             TEXT[]      NOT NULL DEFAULT '{}',
     author_member_id INT         REFERENCES public.member(id) ON DELETE SET NULL,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.policy_rule (
+    id                   SERIAL PRIMARY KEY,
+    name                 TEXT        NOT NULL UNIQUE,
+    category             TEXT        NOT NULL DEFAULT '',
+    description          TEXT        NOT NULL DEFAULT '',
+    rule_text            TEXT        NOT NULL,
+    applies_to_project_id INT        REFERENCES public.project(id) ON DELETE CASCADE,
+    effective_from       DATE,
+    effective_to         DATE,
+    status               TEXT        NOT NULL DEFAULT 'active'
+                                CHECK (status IN ('draft', 'active', 'archived')),
+    created_by_member_id INT         REFERENCES public.member(id) ON DELETE SET NULL,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.employee_benefit (
+    id            SERIAL PRIMARY KEY,
+    member_id     INT            NOT NULL REFERENCES public.member(id) ON DELETE CASCADE,
+    benefit_type  TEXT           NOT NULL
+                                  CHECK (benefit_type IN ('salary', 'leave', 'health', 'bonus', 'allowance', 'other')),
+    title         TEXT           NOT NULL,
+    amount        NUMERIC(14, 2),
+    currency      TEXT           NOT NULL DEFAULT 'USD',
+    balance_days  NUMERIC(8, 2),
+    effective_from DATE,
+    effective_to   DATE,
+    status        TEXT           NOT NULL DEFAULT 'active'
+                                  CHECK (status IN ('active', 'inactive', 'expired')),
+    notes         TEXT           NOT NULL DEFAULT '',
+    created_at    TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    UNIQUE (member_id, benefit_type, title, effective_from)
+);
+
+CREATE TABLE IF NOT EXISTS public.leave_request (
+    id                  SERIAL PRIMARY KEY,
+    member_id           INT         NOT NULL REFERENCES public.member(id) ON DELETE CASCADE,
+    project_id          INT         REFERENCES public.project(id) ON DELETE SET NULL,
+    leave_type          TEXT        NOT NULL DEFAULT 'annual',
+    start_date          DATE        NOT NULL,
+    end_date            DATE        NOT NULL,
+    days_requested      NUMERIC(8, 2) NOT NULL,
+    reason              TEXT        NOT NULL DEFAULT '',
+    status              TEXT        NOT NULL DEFAULT 'pending'
+                                  CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
+    requested_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    final_decision_at   TIMESTAMPTZ,
+    CHECK (end_date >= start_date)
+);
+
+CREATE TABLE IF NOT EXISTS public.leave_approval (
+    id                     SERIAL PRIMARY KEY,
+    leave_request_id       INT         NOT NULL REFERENCES public.leave_request(id) ON DELETE CASCADE,
+    approval_order         INT         NOT NULL,
+    approver_role          TEXT        NOT NULL DEFAULT '',
+    approver_member_id     INT         REFERENCES public.member(id) ON DELETE SET NULL,
+    status                 TEXT        NOT NULL DEFAULT 'pending'
+                                     CHECK (status IN ('pending', 'approved', 'rejected', 'skipped')),
+    decision_by_member_id  INT         REFERENCES public.member(id) ON DELETE SET NULL,
+    decision_at            TIMESTAMPTZ,
+    comments               TEXT        NOT NULL DEFAULT '',
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (leave_request_id, approval_order),
+    CHECK (approver_role <> '' OR approver_member_id IS NOT NULL)
 );
 
 
@@ -130,26 +194,33 @@ CREATE INDEX IF NOT EXISTS idx_expense_project        ON public.project_expense(
 CREATE INDEX IF NOT EXISTS idx_expense_incurred_at    ON public.project_expense(incurred_at);
 CREATE INDEX IF NOT EXISTS idx_knowledge_project      ON public.project_knowledge(project_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_tags         ON public.project_knowledge USING GIN (tags);
+CREATE INDEX IF NOT EXISTS idx_policy_category        ON public.policy_rule(category);
+CREATE INDEX IF NOT EXISTS idx_policy_status          ON public.policy_rule(status);
+CREATE INDEX IF NOT EXISTS idx_benefit_member         ON public.employee_benefit(member_id);
+CREATE INDEX IF NOT EXISTS idx_benefit_type           ON public.employee_benefit(benefit_type);
+CREATE INDEX IF NOT EXISTS idx_leave_member           ON public.leave_request(member_id);
+CREATE INDEX IF NOT EXISTS idx_leave_status           ON public.leave_request(status);
+CREATE INDEX IF NOT EXISTS idx_leave_approval_request ON public.leave_approval(leave_request_id, approval_order);
+CREATE INDEX IF NOT EXISTS idx_leave_approval_role    ON public.leave_approval(approver_role);
 
 
 -- -----------------------------------------------------------------------------
 -- 3. VIEWS
 -- -----------------------------------------------------------------------------
 
--- Budget vs actual spend per project
 CREATE OR REPLACE VIEW public.v_project_budget_summary AS
 SELECT
-    p.id                                        AS project_id,
-    p.name                                      AS project_name,
-    t.name                                      AS team_name,
-    d.name                                      AS department_name,
+    p.id                              AS project_id,
+    p.name                            AS project_name,
+    t.name                            AS team_name,
+    d.name                            AS department_name,
     p.status,
-    pb.currency,
-    COALESCE(pb.total_amount, 0)                AS budget,
-    COALESCE(SUM(pe.amount), 0)                 AS total_spent,
+    COALESCE(pb.currency, 'USD')       AS currency,
+    COALESCE(pb.total_amount, 0)       AS budget,
+    COALESCE(SUM(pe.amount), 0)        AS total_spent,
     COALESCE(pb.total_amount, 0)
-        - COALESCE(SUM(pe.amount), 0)           AS remaining,
-    pb.approved_by,
+        - COALESCE(SUM(pe.amount), 0)  AS remaining,
+    COALESCE(pb.approved_by, '')       AS approved_by,
     pb.approved_at
 FROM      public.project         p
 JOIN      public.team            t  ON t.id = p.team_id
@@ -159,8 +230,6 @@ LEFT JOIN public.project_expense pe ON pe.project_id = p.id
 GROUP BY  p.id, p.name, t.name, d.name, p.status,
           pb.currency, pb.total_amount, pb.approved_by, pb.approved_at;
 
-
--- All teams (and their department) that each member belongs to
 CREATE OR REPLACE VIEW public.v_member_teams AS
 SELECT
     m.id         AS member_id,
@@ -178,53 +247,74 @@ JOIN      public.team        t  ON t.id = tm.team_id
 JOIN      public.department  d  ON d.id = t.department_id
 ORDER BY  m.name, d.name, t.name;
 
-
--- Open-task workload per member
 CREATE OR REPLACE VIEW public.v_task_workload AS
 SELECT
-    m.id                                           AS member_id,
-    m.name                                         AS member_name,
+    m.id                                             AS member_id,
+    m.name                                           AS member_name,
     m.role,
-    COUNT(*) FILTER (WHERE tk.status = 'todo')        AS todo,
-    COUNT(*) FILTER (WHERE tk.status = 'in_progress') AS in_progress,
-    COUNT(*) FILTER (WHERE tk.status = 'review')      AS in_review,
-    COUNT(*) FILTER (WHERE tk.status NOT IN ('done','cancelled')) AS total_open
+    COUNT(tk.id) FILTER (WHERE tk.status = 'todo')        AS todo,
+    COUNT(tk.id) FILTER (WHERE tk.status = 'in_progress') AS in_progress,
+    COUNT(tk.id) FILTER (WHERE tk.status = 'review')      AS in_review,
+    COUNT(tk.id) FILTER (WHERE tk.status NOT IN ('done','cancelled')) AS total_open
 FROM      public.member        m
 LEFT JOIN public.task_assignee ta ON ta.member_id = m.id
 LEFT JOIN public.task          tk ON tk.id = ta.task_id
 GROUP BY  m.id, m.name, m.role
-ORDER BY  total_open DESC;
+ORDER BY  total_open DESC, m.name;
+
+CREATE OR REPLACE VIEW public.v_leave_request_status AS
+SELECT
+    lr.id AS leave_request_id,
+    lr.member_id,
+    m.name AS member_name,
+    m.email AS member_email,
+    m.role AS member_role,
+    lr.project_id,
+    p.name AS project_name,
+    lr.leave_type,
+    lr.start_date,
+    lr.end_date,
+    lr.days_requested,
+    lr.status,
+    COUNT(la.id) AS approval_steps,
+    COUNT(la.id) FILTER (WHERE la.status = 'approved') AS approved_steps,
+    COUNT(la.id) FILTER (WHERE la.status = 'rejected') AS rejected_steps,
+    MIN(la.approval_order) FILTER (WHERE la.status = 'pending') AS next_approval_order,
+    lr.requested_at,
+    lr.final_decision_at
+FROM public.leave_request lr
+JOIN public.member m ON m.id = lr.member_id
+LEFT JOIN public.project p ON p.id = lr.project_id
+LEFT JOIN public.leave_approval la ON la.leave_request_id = lr.id
+GROUP BY lr.id, m.id, m.name, m.email, m.role, p.id, p.name;
 
 
 -- -----------------------------------------------------------------------------
--- 4. SEED DATA  (safe to skip if you already have data)
+-- 4. SEED DATA
 -- -----------------------------------------------------------------------------
 
--- Departments
 INSERT INTO public.department (name, description) VALUES
     ('Engineering',  'Builds and maintains all software products'),
     ('Marketing',    'Handles brand, growth, and customer acquisition'),
     ('Operations',   'Runs internal processes, HR, and finance')
-ON CONFLICT (name) DO NOTHING;
-
--- Teams
-INSERT INTO public.team (name, department_id, description)
-SELECT 'Backend',  id, 'API and database development'   FROM public.department WHERE name = 'Engineering'
-ON CONFLICT (name, department_id) DO NOTHING;
+ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description;
 
 INSERT INTO public.team (name, department_id, description)
-SELECT 'Frontend', id, 'Web and mobile UI development'  FROM public.department WHERE name = 'Engineering'
-ON CONFLICT (name, department_id) DO NOTHING;
+SELECT 'Backend',  id, 'API and database development' FROM public.department WHERE name = 'Engineering'
+ON CONFLICT (name, department_id) DO UPDATE SET description = EXCLUDED.description;
 
 INSERT INTO public.team (name, department_id, description)
-SELECT 'Growth',   id, 'SEO, paid ads, and analytics'   FROM public.department WHERE name = 'Marketing'
-ON CONFLICT (name, department_id) DO NOTHING;
+SELECT 'Frontend', id, 'Web and mobile UI development' FROM public.department WHERE name = 'Engineering'
+ON CONFLICT (name, department_id) DO UPDATE SET description = EXCLUDED.description;
 
 INSERT INTO public.team (name, department_id, description)
-SELECT 'HR',       id, 'Hiring and people operations'   FROM public.department WHERE name = 'Operations'
-ON CONFLICT (name, department_id) DO NOTHING;
+SELECT 'Growth', id, 'SEO, paid ads, and analytics' FROM public.department WHERE name = 'Marketing'
+ON CONFLICT (name, department_id) DO UPDATE SET description = EXCLUDED.description;
 
--- Members
+INSERT INTO public.team (name, department_id, description)
+SELECT 'HR', id, 'Hiring and people operations' FROM public.department WHERE name = 'Operations'
+ON CONFLICT (name, department_id) DO UPDATE SET description = EXCLUDED.description;
+
 INSERT INTO public.member (name, email, phone, role) VALUES
     ('Alice Rahman',   'alice@company.com',   '+8801700000001', 'Backend Engineer'),
     ('Bob Hossain',    'bob@company.com',     '+8801700000002', 'Frontend Engineer'),
@@ -232,195 +322,269 @@ INSERT INTO public.member (name, email, phone, role) VALUES
     ('David Islam',    'david@company.com',   '+8801700000004', 'Growth Marketer'),
     ('Eva Chowdhury',  'eva@company.com',     '+8801700000005', 'Engineering Manager'),
     ('Farhan Karim',   'farhan@company.com',  '+8801700000006', 'HR Manager')
-ON CONFLICT (email) DO NOTHING;
+ON CONFLICT (email) DO UPDATE
+SET name = EXCLUDED.name, phone = EXCLUDED.phone, role = EXCLUDED.role;
 
--- Team memberships
 INSERT INTO public.team_member (team_id, member_id)
 SELECT t.id, m.id
 FROM public.team t, public.member m
 WHERE (t.name = 'Backend'  AND m.email IN ('alice@company.com', 'carol@company.com', 'eva@company.com'))
-   OR (t.name = 'Frontend' AND m.email IN ('bob@company.com',   'carol@company.com', 'eva@company.com'))
+   OR (t.name = 'Frontend' AND m.email IN ('bob@company.com', 'carol@company.com', 'eva@company.com'))
    OR (t.name = 'Growth'   AND m.email IN ('david@company.com'))
    OR (t.name = 'HR'       AND m.email IN ('farhan@company.com'))
 ON CONFLICT DO NOTHING;
 
--- Projects
 INSERT INTO public.project (name, team_id, description, status, start_date, end_date)
-SELECT
-    'MCP Knowledge Server',
-    t.id,
-    'Build the company-wide MCP server backed by Neon Postgres',
-    'active',
-    '2026-01-01',
-    '2026-06-30'
+SELECT 'MCP Knowledge Server', t.id, 'Build the company-wide MCP server backed by Neon Postgres',
+       'active', '2026-01-01', '2026-06-30'
 FROM public.team t WHERE t.name = 'Backend'
-ON CONFLICT DO NOTHING;
+AND NOT EXISTS (
+    SELECT 1 FROM public.project p WHERE p.name = 'MCP Knowledge Server' AND p.team_id = t.id
+);
 
 INSERT INTO public.project (name, team_id, description, status, start_date, end_date)
-SELECT
-    'Company Dashboard',
-    t.id,
-    'Internal React dashboard for ops and finance metrics',
-    'active',
-    '2026-02-01',
-    '2026-07-31'
+SELECT 'Company Dashboard', t.id, 'Internal React dashboard for ops and finance metrics',
+       'active', '2026-02-01', '2026-07-31'
 FROM public.team t WHERE t.name = 'Frontend'
-ON CONFLICT DO NOTHING;
+AND NOT EXISTS (
+    SELECT 1 FROM public.project p WHERE p.name = 'Company Dashboard' AND p.team_id = t.id
+);
 
 INSERT INTO public.project (name, team_id, description, status, start_date, end_date)
-SELECT
-    'Q2 Growth Campaign',
-    t.id,
-    'Paid ads + SEO push for Q2 user acquisition targets',
-    'active',
-    '2026-04-01',
-    '2026-06-30'
+SELECT 'Q2 Growth Campaign', t.id, 'Paid ads + SEO push for Q2 user acquisition targets',
+       'active', '2026-04-01', '2026-06-30'
 FROM public.team t WHERE t.name = 'Growth'
-ON CONFLICT DO NOTHING;
-
--- Tasks — MCP Knowledge Server
-INSERT INTO public.task (title, project_id, description, status, priority, due_date)
-SELECT 'Design full DB schema',     p.id, 'All tables, indexes, views, and seed data', 'done',        'critical', '2026-05-20' FROM public.project p WHERE p.name = 'MCP Knowledge Server'
-ON CONFLICT DO NOTHING;
+AND NOT EXISTS (
+    SELECT 1 FROM public.project p WHERE p.name = 'Q2 Growth Campaign' AND p.team_id = t.id
+);
 
 INSERT INTO public.task (title, project_id, description, status, priority, due_date)
-SELECT 'Implement MCP tools',       p.id, 'CRUD tools for all new tables in main.py',  'in_progress', 'high',     '2026-05-30' FROM public.project p WHERE p.name = 'MCP Knowledge Server'
-ON CONFLICT DO NOTHING;
+SELECT 'Design full DB schema', p.id, 'All tables, indexes, views, and seed data', 'done', 'critical', '2026-05-20'
+FROM public.project p WHERE p.name = 'MCP Knowledge Server'
+AND NOT EXISTS (
+    SELECT 1 FROM public.task tk WHERE tk.title = 'Design full DB schema' AND tk.project_id = p.id
+);
 
 INSERT INTO public.task (title, project_id, description, status, priority, due_date)
-SELECT 'Write integration tests',   p.id, 'Test every tool against Neon staging',      'todo',        'medium',   '2026-06-10' FROM public.project p WHERE p.name = 'MCP Knowledge Server'
-ON CONFLICT DO NOTHING;
-
--- Tasks — Company Dashboard
-INSERT INTO public.task (title, project_id, description, status, priority, due_date)
-SELECT 'Set up React project',      p.id, 'Vite + TypeScript + Tailwind scaffold',     'done',        'high',     '2026-02-15' FROM public.project p WHERE p.name = 'Company Dashboard'
-ON CONFLICT DO NOTHING;
+SELECT 'Implement MCP tools', p.id, 'CRUD tools for all new tables in main.py', 'in_progress', 'high', '2026-05-30'
+FROM public.project p WHERE p.name = 'MCP Knowledge Server'
+AND NOT EXISTS (
+    SELECT 1 FROM public.task tk WHERE tk.title = 'Implement MCP tools' AND tk.project_id = p.id
+);
 
 INSERT INTO public.task (title, project_id, description, status, priority, due_date)
-SELECT 'Budget summary widget',     p.id, 'Pull from v_project_budget_summary view',   'in_progress', 'high',     '2026-05-25' FROM public.project p WHERE p.name = 'Company Dashboard'
-ON CONFLICT DO NOTHING;
-
--- Tasks — Q2 Growth Campaign
-INSERT INTO public.task (title, project_id, description, status, priority, due_date)
-SELECT 'Launch Google Ads',         p.id, 'Set up and fund the Q2 ad campaigns',       'in_progress', 'critical', '2026-04-10' FROM public.project p WHERE p.name = 'Q2 Growth Campaign'
-ON CONFLICT DO NOTHING;
+SELECT 'Write integration tests', p.id, 'Test every tool against Neon staging', 'todo', 'medium', '2026-06-10'
+FROM public.project p WHERE p.name = 'MCP Knowledge Server'
+AND NOT EXISTS (
+    SELECT 1 FROM public.task tk WHERE tk.title = 'Write integration tests' AND tk.project_id = p.id
+);
 
 INSERT INTO public.task (title, project_id, description, status, priority, due_date)
-SELECT 'Keyword research',          p.id, 'Target 50 high-intent keywords for SEO',    'done',        'medium',   '2026-04-05' FROM public.project p WHERE p.name = 'Q2 Growth Campaign'
-ON CONFLICT DO NOTHING;
+SELECT 'Set up React project', p.id, 'Vite + TypeScript + Tailwind scaffold', 'done', 'high', '2026-02-15'
+FROM public.project p WHERE p.name = 'Company Dashboard'
+AND NOT EXISTS (
+    SELECT 1 FROM public.task tk WHERE tk.title = 'Set up React project' AND tk.project_id = p.id
+);
 
--- Task assignees
-INSERT INTO public.task_assignee (task_id, member_id)
-SELECT tk.id, m.id
-FROM   public.task tk, public.member m
-WHERE  tk.title = 'Design full DB schema'   AND m.email = 'alice@company.com'
-ON CONFLICT DO NOTHING;
+INSERT INTO public.task (title, project_id, description, status, priority, due_date)
+SELECT 'Budget summary widget', p.id, 'Pull from v_project_budget_summary view', 'in_progress', 'high', '2026-05-25'
+FROM public.project p WHERE p.name = 'Company Dashboard'
+AND NOT EXISTS (
+    SELECT 1 FROM public.task tk WHERE tk.title = 'Budget summary widget' AND tk.project_id = p.id
+);
 
-INSERT INTO public.task_assignee (task_id, member_id)
-SELECT tk.id, m.id
-FROM   public.task tk, public.member m
-WHERE  tk.title = 'Implement MCP tools'     AND m.email IN ('alice@company.com', 'carol@company.com')
-ON CONFLICT DO NOTHING;
+INSERT INTO public.task (title, project_id, description, status, priority, due_date)
+SELECT 'Launch Google Ads', p.id, 'Set up and fund the Q2 ad campaigns', 'in_progress', 'critical', '2026-04-10'
+FROM public.project p WHERE p.name = 'Q2 Growth Campaign'
+AND NOT EXISTS (
+    SELECT 1 FROM public.task tk WHERE tk.title = 'Launch Google Ads' AND tk.project_id = p.id
+);
 
-INSERT INTO public.task_assignee (task_id, member_id)
-SELECT tk.id, m.id
-FROM   public.task tk, public.member m
-WHERE  tk.title = 'Budget summary widget'   AND m.email IN ('bob@company.com', 'carol@company.com')
-ON CONFLICT DO NOTHING;
-
-INSERT INTO public.task_assignee (task_id, member_id)
-SELECT tk.id, m.id
-FROM   public.task tk, public.member m
-WHERE  tk.title = 'Launch Google Ads'       AND m.email = 'david@company.com'
-ON CONFLICT DO NOTHING;
+INSERT INTO public.task (title, project_id, description, status, priority, due_date)
+SELECT 'Keyword research', p.id, 'Target 50 high-intent keywords for SEO', 'done', 'medium', '2026-04-05'
+FROM public.project p WHERE p.name = 'Q2 Growth Campaign'
+AND NOT EXISTS (
+    SELECT 1 FROM public.task tk WHERE tk.title = 'Keyword research' AND tk.project_id = p.id
+);
 
 INSERT INTO public.task_assignee (task_id, member_id)
 SELECT tk.id, m.id
 FROM   public.task tk, public.member m
-WHERE  tk.title = 'Keyword research'        AND m.email = 'david@company.com'
+WHERE  tk.title = 'Design full DB schema' AND m.email = 'alice@company.com'
 ON CONFLICT DO NOTHING;
 
--- Budgets
+INSERT INTO public.task_assignee (task_id, member_id)
+SELECT tk.id, m.id
+FROM   public.task tk, public.member m
+WHERE  tk.title = 'Implement MCP tools' AND m.email IN ('alice@company.com', 'carol@company.com')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO public.task_assignee (task_id, member_id)
+SELECT tk.id, m.id
+FROM   public.task tk, public.member m
+WHERE  tk.title = 'Budget summary widget' AND m.email IN ('bob@company.com', 'carol@company.com')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO public.task_assignee (task_id, member_id)
+SELECT tk.id, m.id
+FROM   public.task tk, public.member m
+WHERE  tk.title = 'Launch Google Ads' AND m.email = 'david@company.com'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO public.task_assignee (task_id, member_id)
+SELECT tk.id, m.id
+FROM   public.task tk, public.member m
+WHERE  tk.title = 'Keyword research' AND m.email = 'david@company.com'
+ON CONFLICT DO NOTHING;
+
 INSERT INTO public.project_budget (project_id, total_amount, currency, approved_by, approved_at, notes)
 SELECT p.id, 25000.00, 'USD', 'eva@company.com', '2026-01-05 09:00+00', 'Approved for H1 2026'
 FROM   public.project p WHERE p.name = 'MCP Knowledge Server'
-ON CONFLICT (project_id) DO NOTHING;
+ON CONFLICT (project_id) DO UPDATE
+SET total_amount = EXCLUDED.total_amount, currency = EXCLUDED.currency,
+    approved_by = EXCLUDED.approved_by, approved_at = EXCLUDED.approved_at, notes = EXCLUDED.notes;
 
 INSERT INTO public.project_budget (project_id, total_amount, currency, approved_by, approved_at, notes)
 SELECT p.id, 18000.00, 'USD', 'eva@company.com', '2026-02-03 09:00+00', 'Dashboard Q1-Q2 budget'
 FROM   public.project p WHERE p.name = 'Company Dashboard'
-ON CONFLICT (project_id) DO NOTHING;
+ON CONFLICT (project_id) DO UPDATE
+SET total_amount = EXCLUDED.total_amount, currency = EXCLUDED.currency,
+    approved_by = EXCLUDED.approved_by, approved_at = EXCLUDED.approved_at, notes = EXCLUDED.notes;
 
 INSERT INTO public.project_budget (project_id, total_amount, currency, approved_by, approved_at, notes)
 SELECT p.id, 40000.00, 'USD', 'farhan@company.com', '2026-03-28 09:00+00', 'Q2 paid + organic budget'
 FROM   public.project p WHERE p.name = 'Q2 Growth Campaign'
-ON CONFLICT (project_id) DO NOTHING;
+ON CONFLICT (project_id) DO UPDATE
+SET total_amount = EXCLUDED.total_amount, currency = EXCLUDED.currency,
+    approved_by = EXCLUDED.approved_by, approved_at = EXCLUDED.approved_at, notes = EXCLUDED.notes;
 
--- Expenses
 INSERT INTO public.project_expense (project_id, title, amount, category, incurred_at, recorded_by_member_id, notes)
 SELECT p.id, 'Neon Postgres Pro Plan', 19.00, 'software', '2026-01-10',
-       (SELECT id FROM public.member WHERE email = 'alice@company.com'),
-       'Monthly DB hosting'
-FROM   public.project p WHERE p.name = 'MCP Knowledge Server';
+       (SELECT id FROM public.member WHERE email = 'alice@company.com'), 'Monthly DB hosting'
+FROM public.project p WHERE p.name = 'MCP Knowledge Server'
+AND NOT EXISTS (
+    SELECT 1 FROM public.project_expense pe
+    WHERE pe.project_id = p.id AND pe.title = 'Neon Postgres Pro Plan'
+      AND pe.incurred_at = '2026-01-10' AND pe.amount = 19.00
+);
 
 INSERT INTO public.project_expense (project_id, title, amount, category, incurred_at, recorded_by_member_id, notes)
 SELECT p.id, 'Neon Postgres Pro Plan', 19.00, 'software', '2026-02-10',
        (SELECT id FROM public.member WHERE email = 'alice@company.com'), ''
-FROM   public.project p WHERE p.name = 'MCP Knowledge Server';
+FROM public.project p WHERE p.name = 'MCP Knowledge Server'
+AND NOT EXISTS (
+    SELECT 1 FROM public.project_expense pe
+    WHERE pe.project_id = p.id AND pe.title = 'Neon Postgres Pro Plan'
+      AND pe.incurred_at = '2026-02-10' AND pe.amount = 19.00
+);
 
 INSERT INTO public.project_expense (project_id, title, amount, category, incurred_at, recorded_by_member_id, notes)
 SELECT p.id, 'Figma Team Seat', 45.00, 'software', '2026-02-05',
-       (SELECT id FROM public.member WHERE email = 'bob@company.com'),
-       'Design tool for dashboard mockups'
-FROM   public.project p WHERE p.name = 'Company Dashboard';
+       (SELECT id FROM public.member WHERE email = 'bob@company.com'), 'Design tool for dashboard mockups'
+FROM public.project p WHERE p.name = 'Company Dashboard'
+AND NOT EXISTS (
+    SELECT 1 FROM public.project_expense pe
+    WHERE pe.project_id = p.id AND pe.title = 'Figma Team Seat'
+      AND pe.incurred_at = '2026-02-05' AND pe.amount = 45.00
+);
 
 INSERT INTO public.project_expense (project_id, title, amount, category, incurred_at, recorded_by_member_id, notes)
-SELECT p.id, 'Google Ads — April', 8500.00, 'advertising', '2026-04-30',
-       (SELECT id FROM public.member WHERE email = 'david@company.com'),
-       'Q2 first month spend'
-FROM   public.project p WHERE p.name = 'Q2 Growth Campaign';
+SELECT p.id, 'Google Ads - April', 8500.00, 'advertising', '2026-04-30',
+       (SELECT id FROM public.member WHERE email = 'david@company.com'), 'Q2 first month spend'
+FROM public.project p WHERE p.name = 'Q2 Growth Campaign'
+AND NOT EXISTS (
+    SELECT 1 FROM public.project_expense pe
+    WHERE pe.project_id = p.id AND pe.title = 'Google Ads - April'
+      AND pe.incurred_at = '2026-04-30' AND pe.amount = 8500.00
+);
 
 INSERT INTO public.project_expense (project_id, title, amount, category, incurred_at, recorded_by_member_id, notes)
 SELECT p.id, 'SEO Tool (Ahrefs)', 199.00, 'software', '2026-04-01',
        (SELECT id FROM public.member WHERE email = 'david@company.com'), ''
-FROM   public.project p WHERE p.name = 'Q2 Growth Campaign';
-
--- Knowledge base
-INSERT INTO public.project_knowledge (project_id, title, content, tags, author_member_id)
-SELECT
-    p.id,
-    'Architecture Overview',
-    E'## MCP Server Architecture\n\nSingle-file FastMCP 3.x server (`main.py`) connected to Neon Postgres via asyncpg.\n\n- Transport: Streamable HTTP on port 8080\n- Each tool opens and closes its own DB connection\n- `.env` loaded with absolute path + override=True to work inside fastmcp dev inspector',
-    ARRAY['architecture', 'fastmcp', 'neon'],
-    (SELECT id FROM public.member WHERE email = 'alice@company.com')
-FROM public.project p WHERE p.name = 'MCP Knowledge Server'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO public.project_knowledge (project_id, title, content, tags, author_member_id)
-SELECT
-    p.id,
-    'Inspector Gotcha',
-    E'When using `fastmcp dev inspector main.py`, the browser stores the last MCP URL in localStorage.\n\nAlways clear the URL field and set it to `http://localhost:8080/mcp` before connecting, or the inspector silently proxies to the wrong server.',
-    ARRAY['inspector', 'debugging', 'tip'],
-    (SELECT id FROM public.member WHERE email = 'carol@company.com')
-FROM public.project p WHERE p.name = 'MCP Knowledge Server'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO public.project_knowledge (project_id, title, content, tags, author_member_id)
-SELECT
-    p.id,
-    'Q2 Keyword Strategy',
-    E'## Target Keyword Clusters\n\n1. **Brand** — company name variants\n2. **Product** — feature-level long-tail keywords\n3. **Competitor** — comparison and alternative searches\n\nPriority: cluster 2 drives 70% of trial sign-ups historically.',
-    ARRAY['seo', 'keywords', 'q2'],
-    (SELECT id FROM public.member WHERE email = 'david@company.com')
 FROM public.project p WHERE p.name = 'Q2 Growth Campaign'
-ON CONFLICT DO NOTHING;
+AND NOT EXISTS (
+    SELECT 1 FROM public.project_expense pe
+    WHERE pe.project_id = p.id AND pe.title = 'SEO Tool (Ahrefs)'
+      AND pe.incurred_at = '2026-04-01' AND pe.amount = 199.00
+);
+
+INSERT INTO public.project_knowledge (project_id, title, content, tags, author_member_id)
+SELECT p.id, 'Architecture Overview',
+       E'## MCP Server Architecture\n\nSingle-file FastMCP server connected to Neon Postgres via asyncpg.\n\n- Transport: Streamable HTTP on port 8080\n- Each tool opens and closes its own DB connection',
+       ARRAY['architecture', 'fastmcp', 'neon'],
+       (SELECT id FROM public.member WHERE email = 'alice@company.com')
+FROM public.project p WHERE p.name = 'MCP Knowledge Server'
+AND NOT EXISTS (
+    SELECT 1 FROM public.project_knowledge pk
+    WHERE pk.project_id = p.id AND pk.title = 'Architecture Overview'
+);
+
+INSERT INTO public.project_knowledge (project_id, title, content, tags, author_member_id)
+SELECT p.id, 'Inspector Gotcha',
+       E'When using MCP Inspector, clear the URL field and set it to http://localhost:8080/mcp before connecting if the browser reused an old URL.',
+       ARRAY['inspector', 'debugging', 'tip'],
+       (SELECT id FROM public.member WHERE email = 'carol@company.com')
+FROM public.project p WHERE p.name = 'MCP Knowledge Server'
+AND NOT EXISTS (
+    SELECT 1 FROM public.project_knowledge pk
+    WHERE pk.project_id = p.id AND pk.title = 'Inspector Gotcha'
+);
+
+INSERT INTO public.project_knowledge (project_id, title, content, tags, author_member_id)
+SELECT p.id, 'Q2 Keyword Strategy',
+       E'## Target Keyword Clusters\n\n1. Brand terms\n2. Product long-tail terms\n3. Competitor comparison terms',
+       ARRAY['seo', 'keywords', 'q2'],
+       (SELECT id FROM public.member WHERE email = 'david@company.com')
+FROM public.project p WHERE p.name = 'Q2 Growth Campaign'
+AND NOT EXISTS (
+    SELECT 1 FROM public.project_knowledge pk
+    WHERE pk.project_id = p.id AND pk.title = 'Q2 Keyword Strategy'
+);
+
+INSERT INTO public.policy_rule (name, category, description, rule_text, status, created_by_member_id)
+VALUES
+    ('Project Revenue Recognition', 'project_revenue', 'How project revenue is recognized and reviewed', 'Revenue must be tied to signed project milestones and reviewed by Finance before monthly close.', 'active', (SELECT id FROM public.member WHERE email = 'eva@company.com')),
+    ('Delivery Acceptance Policy', 'delivery', 'Delivery sign-off expectations', 'A delivery is accepted only after project lead review, client/stakeholder confirmation, and task closure evidence.', 'active', (SELECT id FROM public.member WHERE email = 'eva@company.com')),
+    ('New Hiring Approval Policy', 'hiring', 'Hiring approval chain', 'New hires require role justification, HR screening, department lead approval, and CEO/CTO approval before offer release.', 'active', (SELECT id FROM public.member WHERE email = 'farhan@company.com')),
+    ('Leave Approval Policy', 'leave', 'Default employee leave approval chain', 'Leave requests require approval from project lead or manager, then HR, then executive approval for long leave or critical coverage periods.', 'active', (SELECT id FROM public.member WHERE email = 'farhan@company.com'))
+ON CONFLICT (name) DO UPDATE
+SET category = EXCLUDED.category,
+    description = EXCLUDED.description,
+    rule_text = EXCLUDED.rule_text,
+    status = EXCLUDED.status,
+    created_by_member_id = EXCLUDED.created_by_member_id,
+    updated_at = NOW();
+
+INSERT INTO public.employee_benefit (member_id, benefit_type, title, amount, currency, balance_days, effective_from, status, notes)
+SELECT m.id, 'salary', 'Base Salary', 6500.00, 'USD', NULL, '2026-01-01', 'active', 'Monthly base salary'
+FROM public.member m WHERE m.email = 'alice@company.com'
+ON CONFLICT (member_id, benefit_type, title, effective_from) DO UPDATE
+SET amount = EXCLUDED.amount, currency = EXCLUDED.currency, status = EXCLUDED.status, notes = EXCLUDED.notes, updated_at = NOW();
+
+INSERT INTO public.employee_benefit (member_id, benefit_type, title, amount, currency, balance_days, effective_from, status, notes)
+SELECT m.id, 'leave', 'Annual Leave Balance', NULL, 'USD', 20.00, '2026-01-01', 'active', 'Annual paid leave allocation'
+FROM public.member m WHERE m.email = 'alice@company.com'
+ON CONFLICT (member_id, benefit_type, title, effective_from) DO UPDATE
+SET balance_days = EXCLUDED.balance_days, status = EXCLUDED.status, notes = EXCLUDED.notes, updated_at = NOW();
+
+INSERT INTO public.employee_benefit (member_id, benefit_type, title, amount, currency, balance_days, effective_from, status, notes)
+SELECT m.id, 'salary', 'Base Salary', 7200.00, 'USD', NULL, '2026-01-01', 'active', 'Monthly base salary'
+FROM public.member m WHERE m.email = 'eva@company.com'
+ON CONFLICT (member_id, benefit_type, title, effective_from) DO UPDATE
+SET amount = EXCLUDED.amount, currency = EXCLUDED.currency, status = EXCLUDED.status, notes = EXCLUDED.notes, updated_at = NOW();
+
+INSERT INTO public.employee_benefit (member_id, benefit_type, title, amount, currency, balance_days, effective_from, status, notes)
+SELECT m.id, 'leave', 'Annual Leave Balance', NULL, 'USD', 24.00, '2026-01-01', 'active', 'Annual paid leave allocation'
+FROM public.member m WHERE m.email = 'eva@company.com'
+ON CONFLICT (member_id, benefit_type, title, effective_from) DO UPDATE
+SET balance_days = EXCLUDED.balance_days, status = EXCLUDED.status, notes = EXCLUDED.notes, updated_at = NOW();
 
 
 -- -----------------------------------------------------------------------------
--- 5. QUICK VERIFICATION QUERIES  (run these after applying the schema)
+-- 5. QUICK VERIFICATION QUERIES
 -- -----------------------------------------------------------------------------
 
 -- SELECT * FROM public.v_project_budget_summary;
 -- SELECT * FROM public.v_member_teams;
 -- SELECT * FROM public.v_task_workload;
+-- SELECT * FROM public.v_leave_request_status;
