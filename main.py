@@ -1554,12 +1554,12 @@ async def delete_policy_rule(policy_rule_id: int) -> str:
 
 @mcp.tool(output_schema=None)
 async def add_employee_benefit(
-    member_id: int,
+    member_id: int | str,
     benefit_type: str,
     title: str,
-    amount: float = 0,
+    amount: float | int | str = 0,
     currency: str = "USD",
-    balance_days: float = 0,
+    balance_days: float | int | str = 0,
     effective_from: str = "",
     effective_to: str = "",
     status: str = "active",
@@ -1568,6 +1568,9 @@ async def add_employee_benefit(
     """Add salary, leave balance, or another employee benefit."""
     conn = await get_connection()
     try:
+        member_id = required_int(member_id)
+        amount = required_float(amount)
+        balance_days = required_float(balance_days)
         row = await conn.fetchrow(
             """
             INSERT INTO public.employee_benefit
@@ -1628,12 +1631,12 @@ async def list_employee_benefits(member_id: int | str = 0, benefit_type: str = "
 
 @mcp.tool(output_schema=None)
 async def update_employee_benefit(
-    benefit_id: int,
+    benefit_id: int | str,
     benefit_type: str,
     title: str,
-    amount: float = 0,
+    amount: float | int | str = 0,
     currency: str = "USD",
-    balance_days: float = 0,
+    balance_days: float | int | str = 0,
     effective_from: str = "",
     effective_to: str = "",
     status: str = "active",
@@ -1642,6 +1645,9 @@ async def update_employee_benefit(
     """Update an employee benefit."""
     conn = await get_connection()
     try:
+        benefit_id = required_int(benefit_id)
+        amount = required_float(amount)
+        balance_days = required_float(balance_days)
         row = await conn.fetchrow(
             """
             UPDATE public.employee_benefit
