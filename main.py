@@ -111,6 +111,12 @@ def ints_from_csv(values_csv: str) -> list[int]:
     return [int(value.strip()) for value in values_csv.split(",") if value.strip()]
 
 
+def int_filter(value: int | str | None) -> int:
+    if value in (None, ""):
+        return 0
+    return int(value)
+
+
 async def execute_status(sql: str, *args: Any) -> str:
     conn = await get_connection()
     try:
@@ -425,10 +431,11 @@ async def add_team(name: str, department_id: int, description: str = "") -> str:
 
 
 @mcp.tool(output_schema=None)
-async def list_teams(department_id: int = 0) -> str:
+async def list_teams(department_id: int | str = 0) -> str:
     """List teams. Pass department_id to filter, or 0 for all teams."""
     conn = await get_connection()
     try:
+        department_id = int_filter(department_id)
         rows = await conn.fetch(
             """
             SELECT t.id, t.name, t.department_id, d.name AS department_name, t.description, t.created_at
@@ -530,10 +537,12 @@ async def add_member_to_team(team_id: int, member_id: int) -> str:
 
 
 @mcp.tool(output_schema=None)
-async def list_team_members(team_id: int = 0, member_id: int = 0) -> str:
+async def list_team_members(team_id: int | str = 0, member_id: int | str = 0) -> str:
     """List team memberships. Pass team_id or member_id to filter, or 0 for all."""
     conn = await get_connection()
     try:
+        team_id = int_filter(team_id)
+        member_id = int_filter(member_id)
         rows = await conn.fetch(
             """
             SELECT tm.team_id, t.name AS team_name, tm.member_id, m.name AS member_name, m.email, tm.joined_at
@@ -608,10 +617,11 @@ async def add_project(
 
 
 @mcp.tool(output_schema=None)
-async def list_projects(team_id: int = 0, status: str = "") -> str:
+async def list_projects(team_id: int | str = 0, status: str = "") -> str:
     """List projects. Pass team_id or status to filter, or leave default for all."""
     conn = await get_connection()
     try:
+        team_id = int_filter(team_id)
         rows = await conn.fetch(
             """
             SELECT p.id, p.name, p.team_id, t.name AS team_name, p.description, p.status,
@@ -748,10 +758,11 @@ async def add_task(
 
 
 @mcp.tool(output_schema=None)
-async def list_tasks(project_id: int = 0, status: str = "", priority: str = "") -> str:
+async def list_tasks(project_id: int | str = 0, status: str = "", priority: str = "") -> str:
     """List tasks. Pass project_id, status, or priority to filter."""
     conn = await get_connection()
     try:
+        project_id = int_filter(project_id)
         rows = await conn.fetch(
             """
             SELECT tk.id, tk.title, tk.project_id, p.name AS project_name, tk.description,
@@ -875,10 +886,12 @@ async def assign_task(task_id: int, member_id: int) -> str:
 
 
 @mcp.tool(output_schema=None)
-async def list_task_assignees(task_id: int = 0, member_id: int = 0) -> str:
+async def list_task_assignees(task_id: int | str = 0, member_id: int | str = 0) -> str:
     """List task assignments. Pass task_id or member_id to filter, or 0 for all."""
     conn = await get_connection()
     try:
+        task_id = int_filter(task_id)
+        member_id = int_filter(member_id)
         rows = await conn.fetch(
             """
             SELECT ta.task_id, tk.title AS task_title, ta.member_id, m.name AS member_name,
@@ -960,10 +973,11 @@ async def upsert_project_budget(
 
 
 @mcp.tool(output_schema=None)
-async def list_project_budgets(project_id: int = 0) -> str:
+async def list_project_budgets(project_id: int | str = 0) -> str:
     """List project budgets. Pass project_id to filter, or 0 for all."""
     conn = await get_connection()
     try:
+        project_id = int_filter(project_id)
         rows = await conn.fetch(
             """
             SELECT pb.id, pb.project_id, p.name AS project_name, pb.total_amount, pb.currency,
@@ -1054,10 +1068,11 @@ async def add_project_expense(
 
 
 @mcp.tool(output_schema=None)
-async def list_project_expenses(project_id: int = 0, category: str = "") -> str:
+async def list_project_expenses(project_id: int | str = 0, category: str = "") -> str:
     """List project expenses. Pass project_id or category to filter."""
     conn = await get_connection()
     try:
+        project_id = int_filter(project_id)
         rows = await conn.fetch(
             """
             SELECT pe.id, pe.project_id, p.name AS project_name, pe.title, pe.amount, pe.category,
@@ -1195,10 +1210,11 @@ async def add_project_knowledge(
 
 
 @mcp.tool(output_schema=None)
-async def list_project_knowledge(project_id: int = 0, tag: str = "") -> str:
+async def list_project_knowledge(project_id: int | str = 0, tag: str = "") -> str:
     """List project knowledge entries. Pass project_id or tag to filter."""
     conn = await get_connection()
     try:
+        project_id = int_filter(project_id)
         rows = await conn.fetch(
             """
             SELECT pk.id, pk.project_id, p.name AS project_name, pk.title, pk.content, pk.tags,
@@ -1342,10 +1358,11 @@ async def add_policy_rule(
 
 
 @mcp.tool(output_schema=None)
-async def list_policy_rules(category: str = "", status: str = "", project_id: int = 0) -> str:
+async def list_policy_rules(category: str = "", status: str = "", project_id: int | str = 0) -> str:
     """List policy rules. Filter by category, status, or project_id."""
     conn = await get_connection()
     try:
+        project_id = int_filter(project_id)
         rows = await conn.fetch(
             """
             SELECT pr.id, pr.name, pr.category, pr.description, pr.rule_text,
@@ -1510,10 +1527,11 @@ async def add_employee_benefit(
 
 
 @mcp.tool(output_schema=None)
-async def list_employee_benefits(member_id: int = 0, benefit_type: str = "", status: str = "") -> str:
+async def list_employee_benefits(member_id: int | str = 0, benefit_type: str = "", status: str = "") -> str:
     """List employee benefits. Filter by member_id, benefit_type, or status."""
     conn = await get_connection()
     try:
+        member_id = int_filter(member_id)
         rows = await conn.fetch(
             """
             SELECT eb.id, eb.member_id, m.name AS member_name, m.email, m.role,
@@ -1611,13 +1629,14 @@ async def create_leave_request(
     days_requested: float,
     leave_type: str = "annual",
     reason: str = "",
-    project_id: int = 0,
+    project_id: int | str = 0,
     approver_roles_csv: str = "",
     approver_member_ids_csv: str = "",
 ) -> str:
     """Create a leave request and optional ordered approval chain by role/member IDs."""
     conn = await get_connection()
     try:
+        project_id = int_filter(project_id)
         async with conn.transaction():
             request_row = await conn.fetchrow(
                 """
@@ -1667,10 +1686,12 @@ async def create_leave_request(
 
 
 @mcp.tool(output_schema=None)
-async def list_leave_requests(member_id: int = 0, status: str = "", project_id: int = 0) -> str:
+async def list_leave_requests(member_id: int | str = 0, status: str = "", project_id: int | str = 0) -> str:
     """List leave requests with approval summary."""
     conn = await get_connection()
     try:
+        member_id = int_filter(member_id)
+        project_id = int_filter(project_id)
         rows = await conn.fetch(
             """
             SELECT *
@@ -1732,11 +1753,12 @@ async def add_leave_approval_step(
     leave_request_id: int,
     approval_order: int,
     approver_role: str = "",
-    approver_member_id: int = 0,
+    approver_member_id: int | str = 0,
 ) -> str:
     """Add an approval step to a leave request by role or member ID."""
     conn = await get_connection()
     try:
+        approver_member_id = int_filter(approver_member_id)
         row = await conn.fetchrow(
             """
             INSERT INTO public.leave_approval
@@ -1797,14 +1819,16 @@ async def review_leave_approval_step(
 
 @mcp.tool(output_schema=None)
 async def list_leave_approvals(
-    leave_request_id: int = 0,
+    leave_request_id: int | str = 0,
     approver_role: str = "",
-    approver_member_id: int = 0,
+    approver_member_id: int | str = 0,
     status: str = "",
 ) -> str:
     """List leave approval steps."""
     conn = await get_connection()
     try:
+        leave_request_id = int_filter(leave_request_id)
+        approver_member_id = int_filter(approver_member_id)
         rows = await conn.fetch(
             """
             SELECT la.id, la.leave_request_id, la.approval_order, la.approver_role,
