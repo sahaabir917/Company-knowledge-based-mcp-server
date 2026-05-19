@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import date, datetime
 from decimal import Decimal
@@ -17,6 +18,28 @@ load_dotenv(ENV_PATH, override=True)
 mcp = FastMCP("CompanyKnowledgeBaseServer")
 
 
+class ConnectionErrorProxy:
+    """Raises a captured connection error from normal query methods."""
+
+    def __init__(self, exc: Exception):
+        self.exc = exc
+
+    async def fetchval(self, *args: Any, **kwargs: Any) -> Any:
+        raise self.exc
+
+    async def fetchrow(self, *args: Any, **kwargs: Any) -> Any:
+        raise self.exc
+
+    async def fetch(self, *args: Any, **kwargs: Any) -> Any:
+        raise self.exc
+
+    async def execute(self, *args: Any, **kwargs: Any) -> Any:
+        raise self.exc
+
+    async def close(self) -> None:
+        return None
+
+
 def get_database_url() -> str:
     database_url = os.getenv("DATABASE_URL")
     if database_url:
@@ -34,8 +57,11 @@ def get_database_url() -> str:
     return f"postgresql://{user}:{password}@{host}:{port}/{database}"
 
 
-async def get_connection() -> asyncpg.Connection:
-    return await asyncpg.connect(get_database_url(), ssl="require")
+async def get_connection() -> asyncpg.Connection | ConnectionErrorProxy:
+    try:
+        return await asyncpg.connect(get_database_url(), ssl="require")
+    except Exception as exc:
+        return ConnectionErrorProxy(exc)
 
 
 def serialize_value(value: Any) -> Any:
@@ -52,15 +78,19 @@ def serialize_row(row: asyncpg.Record) -> dict[str, Any]:
     return {key: serialize_value(value) for key, value in dict(row).items()}
 
 
-def ok(**payload: Any) -> dict[str, Any]:
-    return {"status": "success", **payload}
+def tool_json(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=True, default=str)
 
 
-def error(message: str) -> dict[str, str]:
-    return {"status": "error", "message": message}
+def ok(**payload: Any) -> str:
+    return tool_json({"status": "success", **payload})
 
 
-def rows_payload(name: str, rows: list[asyncpg.Record]) -> dict[str, Any]:
+def error(message: str) -> str:
+    return tool_json({"status": "error", "message": message})
+
+
+def rows_payload(name: str, rows: list[asyncpg.Record]) -> str:
     return ok(count=len(rows), **{name: [serialize_row(row) for row in rows]})
 
 
@@ -76,7 +106,7 @@ async def execute_status(sql: str, *args: Any) -> str:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def test_connection() -> dict[str, Any]:
     """Test the database connection."""
     conn = await get_connection()
@@ -89,7 +119,7 @@ async def test_connection() -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def create_company_schema() -> dict[str, Any]:
     """Create all company knowledge base tables, indexes, views, and seed data from schema2.sql."""
     if not SCHEMA_PATH.exists():
@@ -105,7 +135,7 @@ async def create_company_schema() -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def create_member_table() -> dict[str, Any]:
     """Backward-compatible helper that now creates the full schema."""
     return await create_company_schema()
@@ -116,7 +146,7 @@ async def create_member_table() -> dict[str, Any]:
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def add_member(name: str, email: str, phone: str = "", role: str = "") -> dict[str, Any]:
     """Add a new member."""
     conn = await get_connection()
@@ -139,7 +169,7 @@ async def add_member(name: str, email: str, phone: str = "", role: str = "") -> 
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def list_members() -> dict[str, Any]:
     """List all members."""
     conn = await get_connection()
@@ -158,7 +188,7 @@ async def list_members() -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def get_member_by_email(email: str) -> dict[str, Any]:
     """Get a member by email."""
     conn = await get_connection()
@@ -180,7 +210,7 @@ async def get_member_by_email(email: str) -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def update_member(email: str, name: str, phone: str = "", role: str = "") -> dict[str, Any]:
     """Update a member by email."""
     conn = await get_connection()
@@ -206,7 +236,7 @@ async def update_member(email: str, name: str, phone: str = "", role: str = "") 
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def delete_member(email: str) -> dict[str, Any]:
     """Delete a member by email."""
     try:
@@ -223,7 +253,7 @@ async def delete_member(email: str) -> dict[str, Any]:
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def add_department(name: str, description: str = "") -> dict[str, Any]:
     """Add a new department."""
     conn = await get_connection()
@@ -244,7 +274,7 @@ async def add_department(name: str, description: str = "") -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def list_departments() -> dict[str, Any]:
     """List all departments."""
     conn = await get_connection()
@@ -263,7 +293,7 @@ async def list_departments() -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def get_department(department_id: int) -> dict[str, Any]:
     """Get a department by ID."""
     conn = await get_connection()
@@ -285,7 +315,7 @@ async def get_department(department_id: int) -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def update_department(department_id: int, name: str, description: str = "") -> dict[str, Any]:
     """Update a department."""
     conn = await get_connection()
@@ -310,7 +340,7 @@ async def update_department(department_id: int, name: str, description: str = ""
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def delete_department(department_id: int) -> dict[str, Any]:
     """Delete a department by ID."""
     try:
@@ -327,7 +357,7 @@ async def delete_department(department_id: int) -> dict[str, Any]:
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def add_team(name: str, department_id: int, description: str = "") -> dict[str, Any]:
     """Add a team under a department."""
     conn = await get_connection()
@@ -349,7 +379,7 @@ async def add_team(name: str, department_id: int, description: str = "") -> dict
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def list_teams(department_id: int = 0) -> dict[str, Any]:
     """List teams. Pass department_id to filter, or 0 for all teams."""
     conn = await get_connection()
@@ -371,7 +401,7 @@ async def list_teams(department_id: int = 0) -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def get_team(team_id: int) -> dict[str, Any]:
     """Get a team by ID."""
     conn = await get_connection()
@@ -394,7 +424,7 @@ async def get_team(team_id: int) -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def update_team(team_id: int, name: str, department_id: int, description: str = "") -> dict[str, Any]:
     """Update a team."""
     conn = await get_connection()
@@ -420,7 +450,7 @@ async def update_team(team_id: int, name: str, department_id: int, description: 
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def delete_team(team_id: int) -> dict[str, Any]:
     """Delete a team by ID."""
     try:
@@ -432,7 +462,7 @@ async def delete_team(team_id: int) -> dict[str, Any]:
         return error(str(exc))
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def add_member_to_team(team_id: int, member_id: int) -> dict[str, Any]:
     """Add a member to a team."""
     conn = await get_connection()
@@ -454,7 +484,7 @@ async def add_member_to_team(team_id: int, member_id: int) -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def list_team_members(team_id: int = 0, member_id: int = 0) -> dict[str, Any]:
     """List team memberships. Pass team_id or member_id to filter, or 0 for all."""
     conn = await get_connection()
@@ -479,7 +509,7 @@ async def list_team_members(team_id: int = 0, member_id: int = 0) -> dict[str, A
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def remove_member_from_team(team_id: int, member_id: int) -> dict[str, Any]:
     """Remove a member from a team."""
     try:
@@ -500,7 +530,7 @@ async def remove_member_from_team(team_id: int, member_id: int) -> dict[str, Any
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def add_project(
     name: str,
     team_id: int,
@@ -532,7 +562,7 @@ async def add_project(
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def list_projects(team_id: int = 0, status: str = "") -> dict[str, Any]:
     """List projects. Pass team_id or status to filter, or leave default for all."""
     conn = await get_connection()
@@ -557,7 +587,7 @@ async def list_projects(team_id: int = 0, status: str = "") -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def get_project(project_id: int) -> dict[str, Any]:
     """Get a project by ID."""
     conn = await get_connection()
@@ -581,7 +611,7 @@ async def get_project(project_id: int) -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def update_project(
     project_id: int,
     name: str,
@@ -623,7 +653,7 @@ async def update_project(
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def delete_project(project_id: int) -> dict[str, Any]:
     """Delete a project by ID."""
     try:
@@ -640,7 +670,7 @@ async def delete_project(project_id: int) -> dict[str, Any]:
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def add_task(
     title: str,
     project_id: int,
@@ -672,7 +702,7 @@ async def add_task(
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def list_tasks(project_id: int = 0, status: str = "", priority: str = "") -> dict[str, Any]:
     """List tasks. Pass project_id, status, or priority to filter."""
     conn = await get_connection()
@@ -699,7 +729,7 @@ async def list_tasks(project_id: int = 0, status: str = "", priority: str = "") 
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def get_task(task_id: int) -> dict[str, Any]:
     """Get a task by ID."""
     conn = await get_connection()
@@ -723,7 +753,7 @@ async def get_task(task_id: int) -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def update_task(
     task_id: int,
     title: str,
@@ -765,7 +795,7 @@ async def update_task(
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def delete_task(task_id: int) -> dict[str, Any]:
     """Delete a task by ID."""
     try:
@@ -777,7 +807,7 @@ async def delete_task(task_id: int) -> dict[str, Any]:
         return error(str(exc))
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def assign_task(task_id: int, member_id: int) -> dict[str, Any]:
     """Assign a task to a member."""
     conn = await get_connection()
@@ -799,7 +829,7 @@ async def assign_task(task_id: int, member_id: int) -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def list_task_assignees(task_id: int = 0, member_id: int = 0) -> dict[str, Any]:
     """List task assignments. Pass task_id or member_id to filter, or 0 for all."""
     conn = await get_connection()
@@ -825,7 +855,7 @@ async def list_task_assignees(task_id: int = 0, member_id: int = 0) -> dict[str,
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def unassign_task(task_id: int, member_id: int) -> dict[str, Any]:
     """Remove a task assignment."""
     try:
@@ -846,7 +876,7 @@ async def unassign_task(task_id: int, member_id: int) -> dict[str, Any]:
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def upsert_project_budget(
     project_id: int,
     total_amount: float,
@@ -884,7 +914,7 @@ async def upsert_project_budget(
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def list_project_budgets(project_id: int = 0) -> dict[str, Any]:
     """List project budgets. Pass project_id to filter, or 0 for all."""
     conn = await get_connection()
@@ -907,7 +937,7 @@ async def list_project_budgets(project_id: int = 0) -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def get_project_budget(project_id: int) -> dict[str, Any]:
     """Get one project's budget."""
     conn = await get_connection()
@@ -931,7 +961,7 @@ async def get_project_budget(project_id: int) -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def delete_project_budget(project_id: int) -> dict[str, Any]:
     """Delete a project's budget."""
     try:
@@ -943,7 +973,7 @@ async def delete_project_budget(project_id: int) -> dict[str, Any]:
         return error(str(exc))
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def add_project_expense(
     project_id: int,
     title: str,
@@ -978,7 +1008,7 @@ async def add_project_expense(
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def list_project_expenses(project_id: int = 0, category: str = "") -> dict[str, Any]:
     """List project expenses. Pass project_id or category to filter."""
     conn = await get_connection()
@@ -1005,7 +1035,7 @@ async def list_project_expenses(project_id: int = 0, category: str = "") -> dict
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def get_project_expense(expense_id: int) -> dict[str, Any]:
     """Get one project expense by ID."""
     conn = await get_connection()
@@ -1031,7 +1061,7 @@ async def get_project_expense(expense_id: int) -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def update_project_expense(
     expense_id: int,
     project_id: int,
@@ -1077,7 +1107,7 @@ async def update_project_expense(
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def delete_project_expense(expense_id: int) -> dict[str, Any]:
     """Delete a project expense by ID."""
     try:
@@ -1089,7 +1119,7 @@ async def delete_project_expense(expense_id: int) -> dict[str, Any]:
         return error(str(exc))
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def add_project_knowledge(
     project_id: int,
     title: str,
@@ -1119,7 +1149,7 @@ async def add_project_knowledge(
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def list_project_knowledge(project_id: int = 0, tag: str = "") -> dict[str, Any]:
     """List project knowledge entries. Pass project_id or tag to filter."""
     conn = await get_connection()
@@ -1145,7 +1175,7 @@ async def list_project_knowledge(project_id: int = 0, tag: str = "") -> dict[str
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def get_project_knowledge(knowledge_id: int) -> dict[str, Any]:
     """Get one project knowledge entry by ID."""
     conn = await get_connection()
@@ -1170,7 +1200,7 @@ async def get_project_knowledge(knowledge_id: int) -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def update_project_knowledge(
     knowledge_id: int,
     title: str,
@@ -1207,7 +1237,7 @@ async def update_project_knowledge(
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def delete_project_knowledge(knowledge_id: int) -> dict[str, Any]:
     """Delete a project knowledge entry by ID."""
     try:
@@ -1224,7 +1254,7 @@ async def delete_project_knowledge(knowledge_id: int) -> dict[str, Any]:
 # =============================================================================
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def list_project_budget_summary() -> dict[str, Any]:
     """List budget versus actual spend per project."""
     conn = await get_connection()
@@ -1237,7 +1267,7 @@ async def list_project_budget_summary() -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def list_member_teams() -> dict[str, Any]:
     """List all teams that each member belongs to."""
     conn = await get_connection()
@@ -1250,7 +1280,7 @@ async def list_member_teams() -> dict[str, Any]:
         await conn.close()
 
 
-@mcp.tool()
+@mcp.tool(output_schema=None)
 async def list_task_workload() -> dict[str, Any]:
     """List open-task workload per member."""
     conn = await get_connection()
